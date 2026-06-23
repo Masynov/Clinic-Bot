@@ -302,7 +302,6 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
 
     welcome_text = (
         "<b>🩺 МЕДИЦИНСКИЙ ЦЕНТР «ПРАЙМ»</b>\n"
-        "<code>[БД-РЕЖИМ: АКТИВЕН]</code>\n\n"
         "<blockquote>Добро пожаловать в единую цифровую систему управления Вашим здоровьем. All-in-one платформа для связи с клиникой.</blockquote>\n"
         "Все доступные функции структурированы в нижнем меню взаимодействия."
     )
