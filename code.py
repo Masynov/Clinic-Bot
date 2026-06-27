@@ -20,7 +20,7 @@ from aiogram.types import (
 #          КОНФИГУРАЦИЯ И СИСТЕМНЫЕ НАСТРОЙКИ
 # ═══════════════════════════════════════════════════
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = 5537838624  
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", 0))  
 ADMIN_SECRET_PASSWORD = os.getenv("ADMIN_SECRET_PASSWORD", "prime_secret_2026")
 DB_FILE = "clinic_bot.db"
 
@@ -65,6 +65,11 @@ class AdminStates(StatesGroup):
     entering_broadcast_text = State()
     choosing_broadcast_segment = State()
 
+class ReviewStates(StatesGroup):
+    waiting_for_rating = State()     # Ожидание оценки при создании
+    waiting_for_text = State()       # Ожидание текста при создании
+    waiting_for_new_text = State()   # Ожидание нового текста при изменении
+
 # ═══════════════════════════════════════════════════
 #             РАБОТА С ЛОКАЛЬНОЙ БАЗОЙ ДАННЫХ
 # ═══════════════════════════════════════════════════
@@ -104,6 +109,16 @@ def init_db():
             id INTEGER PRIMARY KEY,
             total_stars INTEGER,
             count INTEGER
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id BIGINT NOT NULL,
+            username TEXT,
+            rating INTEGER NOT NULL,
+            review_text TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     cursor.execute("SELECT COUNT(*) FROM reviews_stats")
@@ -199,19 +214,15 @@ def db_pop_application(user_id: int):
     return None
 
 def db_get_reviews_stats():
+    """Динамически считает общее количество отзывов и средний рейтинг из реальной таблицы reviews"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("SELECT total_stars, count FROM reviews_stats WHERE id = 1")
-    row = cursor.fetchone()
+    cursor.execute("SELECT COUNT(id), AVG(rating) FROM reviews")
+    count, avg_rating = cursor.fetchone()
     conn.close()
-    return {"total_stars": row[0], "count": row[1]}
-
-def db_update_reviews_stats(stars: int):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE reviews_stats SET total_stars = total_stars + ?, count = count + 1 WHERE id = 1", (stars,))
-    conn.commit()
-    conn.close()
+    if not count or avg_rating is None:
+        return {"total_stars": 0, "count": 0, "avg": 0.0}
+    return {"total_stars": int(avg_rating * count), "count": count, "avg": round(avg_rating, 2)}
 
 # ═══════════════════════════════════════════════════
 #    АВТО-ПЕРЕХВАТ (MIDDLEWARE) И ОЧИСТКА ЧАТА
@@ -302,7 +313,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
 
     welcome_text = (
         "<b>🩺 МЕДИЦИНСКИЙ ЦЕНТР «ПРАЙМ»</b>\n"
-        "<blockquote>Добро пожаловать в единую цифровую систему управления Вашим здоровьем. All-in-one платформа для связи с клиникой.</blockquote>\n"
+        "<blockquote>Добро пожаловать в единую цифровую систему управления Вашим здоровьем. All-in-one платформа для связи с klinikoy.</blockquote>\n"
         "Все доступные функции структурированы в нижнем меню взаимодействия."
     )
     res = await message.answer(welcome_text, reply_markup=get_full_main_menu(), parse_mode=ParseMode.HTML)
@@ -317,60 +328,121 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
 @router.message(F.text == "⭐ Отзывы клиники")
 async def review_handler(message: Message, state: FSMContext):
     stats = db_get_reviews_stats()
-    avg_rating = stats["total_stars"] / stats["count"]
+    avg_rating = stats["avg"]
+    count = stats["count"]
+    stars = "⭐" * int(avg_rating) if avg_rating > 0 else "Нет оценок"
     
-    stars_markup = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⭐", callback_data="rev_1"), InlineKeyboardButton(text="⭐⭐", callback_data="rev_2"), InlineKeyboardButton(text="⭐⭐⭐", callback_data="rev_3")],
-        [InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data="rev_4"), InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data="rev_5")]
+    text = (
+        f"<b>🌟 Раздел отзывов нашей клиники</b>\n\n"
+        f"📊 <b>Текущий рейтинг:</b> {avg_rating:.2f} / 5.0 {stars}\n"
+        f"💬 <b>Всего отзывов:</b> {count} шт.\n\n"
+        f"Вы можете оставить свой отзыв или управлять уже написанным."
+    )
+    
+    builder = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✍️ Оставить отзыв", callback_data="add_review")],
+        [InlineKeyboardButton(text="👀 Мой отзыв", callback_data="my_review_menu")]
     ])
     
-    res = await message.answer(
-        f"<b>📊 Динамический рейтинг клиники: {avg_rating:.2f} / 5.00 ⭐</b>\n"
-        f"<i>(Всего получено оценок от пациентов: {stats['count']})</i>\n\n"
-        f"Пожалуйста, оцените качество обслуживания в нашей сети:", 
-        reply_markup=stars_markup, 
-        parse_mode=ParseMode.HTML
-    )
+    res = await message.answer(text, reply_markup=builder, parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
 
-@router.callback_query(F.data.startswith("rev_"))
-async def process_smart_review(callback: CallbackQuery):
-    rating = int(callback.data.split("_")[1])
-    await callback.answer()
+@router.callback_query(F.data == "add_review")
+async def add_review_start(callback: CallbackQuery, state: FSMContext):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM reviews WHERE user_id = ?", (callback.from_user.id,))
+    existing = cursor.fetchone()
+    conn.close()
     
-    db_update_reviews_stats(rating)
-    stats = db_get_reviews_stats()
-    new_avg = stats["total_stars"] / stats["count"]
-    
-    if rating >= 4:
-        good_text = (
-            f"✅ <b>Большое спасибо за Вашу оценку ({rating}/5)!</b>\n\n"
-            f"Благодаря Вам наш текущий рейтинг поднялся до <b>{new_avg:.2f} ⭐</b>.\n"
-            "Мы будем искренне признательны, если Вы продублируете свой отзыв на независимых площадках:\n"
-            "🌐 <a href='https://yandex.ru/maps'>Яндекс.Карты</a>\n"
-            "🌐 <a href='https://prodoctorov.ru'>Портал ПроДокторов</a>"
-        )
-        await callback.message.edit_text(good_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-    else:
-        bad_text = (
-            f"⚠️ <b>Принято. Нам очень жаль, что Вы столкнулись с неудобствами ({rating}/5).</b>\n\n"
-            "Ваш отзыв переведен в статус <b>«Претензия»</b> и направлен напрямую директору клиники. "
-            "Служба контроля качества свяжется с Вами для урегулирования ситуации в течение 30 минут."
-        )
-        await callback.message.edit_text(bad_text, parse_mode=ParseMode.HTML)
+    if existing:
+        await callback.answer("Вы уже оставляли отзыв! Используйте кнопку 'Мой отзыв' для управления.", show_alert=True)
+        return
         
-        targets = list(ACTIVE_ADMINS)
-        if ADMIN_CHAT_ID != 0:
-            targets.append(ADMIN_CHAT_ID)
-        for chat_id in set(targets):
-            try:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=f"🚨 <b>ЖАЛОБА/НЕГАТИВНЫЙ ОТЗЫВ</b>\n• Пациент: ID {callback.from_user.id}\n• Оценка: {rating} из 5\n• Требуется срочное вмешательство руководства!",
-                    parse_mode=ParseMode.HTML
-                )
-            except Exception:
-                pass
+    await state.set_state(ReviewStates.waiting_for_rating)
+    buttons = [
+        [InlineKeyboardButton(text=f"{i} ⭐", callback_data=f"rate_{i}") for i in range(1, 4)],
+        [InlineKeyboardButton(text=f"{i} ⭐", callback_data=f"rate_{i}") for i in range(4, 6)]
+    ]
+    await callback.message.edit_text("Пожалуйста, выберите вашу оценку клинике:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.answer()
+
+@router.callback_query(ReviewStates.waiting_for_rating, F.data.startswith("rate_"))
+async def add_review_rating(callback: CallbackQuery, state: FSMContext):
+    rating = int(callback.data.split("_")[1])
+    await state.update_data(user_rating=rating)
+    await state.set_state(ReviewStates.waiting_for_text)
+    await callback.message.edit_text("Отлично! Теперь напишите текст вашего отзыва одним сообщением:")
+    await callback.answer()
+
+@router.message(ReviewStates.waiting_for_text, F.text)
+async def add_review_text_save(message: Message, state: FSMContext):
+    data = await state.get_data()
+    rating = data.get("user_rating")
+    text = html.escape(message.text.strip())
+    username = f"@{message.from_user.username}" if message.from_user.username else message.from_user.full_name
+    
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO reviews (user_id, username, rating, review_text) VALUES (?, ?, ?, ?)",
+        (message.from_user.id, username, rating, text)
+    )
+    conn.commit()
+    conn.close()
+    
+    await state.clear()
+    await message.answer("✅ Спасибо! Ваш отзыв успешно сохранен.")
+
+@router.callback_query(F.data == "my_review_menu")
+async def show_my_review(callback: CallbackQuery):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, rating, review_text FROM reviews WHERE user_id = ?", (callback.from_user.id,))
+    review = cursor.fetchone()
+    conn.close()
+    
+    if not review:
+        await callback.answer("Вы еще не оставляли отзывов.", show_alert=True)
+        return
+        
+    review_id, rating, review_text = review
+    stars = "⭐" * rating
+    
+    text = (
+        f"<b>📝 Ваш текущий отзыв:</b>\n\n"
+        f"<b>Оценка:</b> {rating}/5 {stars}\n"
+        f"<b>Текст:</b> <i>\"{review_text}\"</i>"
+    )
+    
+    builder = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить текст отзыва", callback_data=f"edit_text_{review_id}")]
+    ])
+    await callback.message.edit_text(text, reply_markup=builder, parse_mode=ParseMode.HTML)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("edit_text_"))
+async def edit_review_text_start(callback: CallbackQuery, state: FSMContext):
+    review_id = int(callback.data.split("_")[2])
+    await state.update_data(edit_review_id=review_id)
+    await state.set_state(ReviewStates.waiting_for_new_text)
+    await callback.message.answer("Введите новый текст для вашего отзыва:")
+    await callback.answer()
+
+@router.message(ReviewStates.waiting_for_new_text, F.text)
+async def edit_review_text_save(message: Message, state: FSMContext):
+    data = await state.get_data()
+    review_id = data.get("edit_review_id")
+    new_text = html.escape(message.text.strip())
+    
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE reviews SET review_text = ? WHERE id = ?", (new_text, review_id))
+    conn.commit()
+    conn.close()
+    
+    await state.clear()
+    await message.answer("✅ Текст вашего отзыва успешно изменен.")
 
 # ═══════════════════════════════════════════════════
 #             БЕСПЛАТНОЕ АНКЕТИРОВАНИЕ (FSM)
@@ -628,7 +700,7 @@ async def adm_view_pending_applications(callback: CallbackQuery):
     for user_id, app_data in list(apps.items()):
         moderation_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Одобрить и выгрузить в МИС", callback_data=f"adm_approve_{user_id}")],
-            [InlineKeyboardButton(text="❌ Отклонить заявку", callback_data=f"adm_reject_{user_id}")]
+            [InlineKeyboardButton(text="❌ Отклонть заявку", callback_data=f"adm_reject_{user_id}")]
         ])
         
         info = (
@@ -704,6 +776,49 @@ async def process_moderation(callback: CallbackQuery):
         except Exception:
             pass
         await callback.message.edit_text(callback.message.text + "\n\n🔴 <b>Вердикт: Анкета отклонена администрацией</b>")
+
+@router.message(Command("admin_reviews"), IsAdminFilter())
+async def admin_view_reviews(message: Message):
+    """Просмотр всех отзывов с возможностью мгновенного удаления для администратора"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, rating, review_text FROM reviews ORDER BY created_at DESC")
+    all_reviews = cursor.fetchall()
+    conn.close()
+    
+    if not all_reviews:
+        await message.answer("📦 В базе данных пока нет ни одного отзыва.")
+        return
+        
+    await message.answer(f"⚙️ <b>Панель модерации отзывов (Всего: {len(all_reviews)}):</b>", parse_mode=ParseMode.HTML)
+    
+    for rev_id, username, rating, review_text in all_reviews:
+        stars = "⭐" * rating
+        admin_text = (
+            f"🆔 <b>ID отзыва:</b> {rev_id}\n"
+            f"👤 <b>Автор:</b> {username}\n"
+            f"📊 <b>Оценка:</b> {rating}/5 {stars}\n"
+            f"💬 <b>Текст:</b> {review_text}"
+        )
+        builder = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🗑️ Удалить отзыв", callback_data=f"admin_del_{rev_id}")]
+        ])
+        await message.answer(admin_text, reply_markup=builder, parse_mode=ParseMode.HTML)
+
+@router.callback_query(F.data.startswith("admin_del_"), IsAdminFilter())
+async def admin_delete_review_action(callback: CallbackQuery):
+    """Обработка удаления отзыва админом в один клик"""
+    review_id = int(callback.data.split("_")[2])
+    
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM reviews WHERE id = ?", (review_id,))
+    conn.commit()
+    conn.close()
+    
+    # Стираем сообщение с отзывом из чата модератора
+    await callback.message.delete()
+    await callback.answer("Отзыв безвозвратно удален из БД!", show_alert=True)
 
 # ═══════════════════════════════════════════════════
 #          ШТАТНЫЕ ИНФОРМАЦИОННЫЕ ХЭНДЛЕРЫ
