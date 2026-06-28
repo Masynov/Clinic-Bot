@@ -65,42 +65,6 @@ class AdminStates(StatesGroup):
     entering_broadcast_text = State()
     choosing_broadcast_segment = State()
 
-# Состояния для интерактивной службы поддержки
-class SupportStates(StatesGroup):
-    waiting_for_user_question = State()    # Пациент формулирует вопрос
-    waiting_for_admin_reply = State()      # Администратор пишет ответ пациенту
-
-# ═══════════════════════════════════════════════════
-#         БАЗА ЗНАНИЙ СЛУЖБЫ ПОДДЕРЖКИ (FAQ)
-# ═══════════════════════════════════════════════════
-
-FAQ_DATA = [
-    {
-        "keywords": ["адрес", "найти", "где", "находитесь", "карта", "проезд", "улица", "ул"],
-        "answer": "🏥 <b>Адрес клиники:</b> г. Москва, ул. Центральная, д. 45.\n🕒 <b>Режим работы:</b> Круглосуточно, 24/7 без выходных."
-    },
-    {
-        "keywords": ["цена", "прайс", "стоимость", "сколько стоит", "услуг", "руб", "бесплатно"],
-        "answer": "💰 <b>Ценовая политика медицинского центра:</b>\n• Первичный осмотр специалиста: 0 руб (по федеральной квоте)\n• Анализ и разбор снимков КТ / МРТ: 0 руб.\n\n<i>Для индивидуального расчета стоимости манипуляций свяжитесь с оператором через кнопку вызова поддержки ниже.</i>"
-    },
-    {
-        "keywords": ["отмена", "перенос", "отменить", "перенести", "не смогу", "опоздаю"],
-        "answer": "📅 <b>Управление вашей записью:</b>\nЧтобы скорректировать время приема или отменить запись в листе ожидания, отправьте текстовое сообщение нашему дежурному администратору (нажмите кнопку вызова оператора ниже), указав ваше ФИО."
-    },
-    {
-        "keywords": ["кт", "снимок", "рентген", "исследование", "мрт", "файл", "документ"],
-        "answer": "🩺 <b>Услуга «Второе мнение»:</b>\nВы можете абсолютно бесплатно прикрепить КТ-исследование или рентген-снимок на 7-м шаге заполнения медицинской анкеты при нажатии кнопки <i>«Оставить заявку на прием»</i>."
-    }
-]
-
-def search_faq(text: str) -> str | None:
-    text_lower = text.lower()
-    for item in FAQ_DATA:
-        for keyword in item["keywords"]:
-            if keyword in text_lower:
-                return item["answer"]
-    return None
-
 # ═══════════════════════════════════════════════════
 #             РАБОТА С ЛОКАЛЬНОЙ БАЗОЙ ДАННЫХ
 # ═══════════════════════════════════════════════════
@@ -327,10 +291,7 @@ def get_skip_kb(callback_action: str) -> InlineKeyboardMarkup:
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext):
-    # Сначала удаляем всё старое барахло из чата на базе БД
     await clear_chat_history(message.chat.id)
-    
-    # Сбрасываем любые зависшие состояния ввода анкеты или техподдержки
     await state.clear()
 
     utm_source = command.args if command.args else "Прямой переход"
@@ -339,11 +300,11 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
     welcome_text = (
         "<b>🩺 МЕДИЦИНСКИЙ ЦЕНТР «ПРАЙМ»</b>\n"
         "<blockquote>Добро пожаловать в единую цифровую систему управления Вашим здоровьем. All-in-one платформа для связи с klinikoy.</blockquote>\n"
-        "Все доступные функции структурированы в нижнем меню взаимодействия."
+        "Все доступные функции структурированы в нижнем меню взаимодействия.\n\n"
+        "⚠️ <i><b>Примечание:</b> Данный бот является исключительно демонстрационным проектом. Медицинский центр «ПРАЙМ» вымышлен, "
+        "а система создана для демонстрации технических возможностей автоматизации, обработки FSM-анкет и интеграции с БД.</i>"
     )
     res = await message.answer(welcome_text, reply_markup=get_full_main_menu(), parse_mode=ParseMode.HTML)
-    
-    # Запоминаем новое приветствие бота, чтобы удалить его при следующем /start
     await track_msg(message.chat.id, res.message_id)
 
 # ═══════════════════════════════════════════════════
@@ -357,17 +318,52 @@ async def review_handler(message: Message, state: FSMContext):
     
     stars_markup = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⭐", callback_data="rev_1"), InlineKeyboardButton(text="⭐⭐", callback_data="rev_2"), InlineKeyboardButton(text="⭐⭐⭐", callback_data="rev_3")],
-        [InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data="rev_4"), InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data="rev_5")]
+        [InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data="rev_4"), InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data="rev_5")],
+        [InlineKeyboardButton(text="📖 Прочитать отзывы пациентов", callback_data="view_other_reviews")]
     ])
     
     res = await message.answer(
         f"<b>📊 Динамический рейтинг клиники: {avg_rating:.2f} / 5.00 ⭐</b>\n"
         f"<i>(Всего получено оценок от пациентов: {stats['count']})</i>\n\n"
-        f"Пожалуйста, оцените качество обслуживания в нашей сети:", 
+        f"Пожалуйста, оцените качество обслуживания в нашей сети или прочитайте отзывы других людей:", 
         reply_markup=stars_markup, 
         parse_mode=ParseMode.HTML
     )
     await track_msg(message.chat.id, res.message_id)
+
+@router.callback_query(F.data == "view_other_reviews")
+async def callback_view_reviews(callback: CallbackQuery):
+    reviews_text = (
+        "<b>💬 Последние отзывы наших пациентов:</b>\n\n"
+        "1. ⭐⭐⭐⭐⭐ <b>Елена К.</b>\n"
+        "<i>«Прекрасный кардиолог Иванов И.И.! Очень внимательно отнесся к проблеме, изучил КТ-снимок и всё подробно объяснил. Клиника чистая, персонал вежливый.»</i>\n\n"
+        "2. ⭐⭐⭐⭐⭐ <b>Михаил Т.</b>\n"
+        "<i>«Обращался к терапевту Петровой. Быстро поставили диагноз, направили на анализы. Результаты пришли на почту уже вечером. Настоящие профессионалы!»</i>\n\n"
+        "3. ⭐⭐⭐⭐ <b>Ольга Б.</b>\n"
+        "<i>«Лечение отличное, но парковка перед клиникой была полностью занята, пришлось просить администратора открыть резервный шлагбаум. В остальном всё супер.»</i>"
+    )
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ Назад к оценке", callback_data="back_to_reviews_main")]
+    ])
+    await callback.message.edit_text(reviews_text, reply_markup=back_kb, parse_mode=ParseMode.HTML)
+
+@router.callback_query(F.data == "back_to_reviews_main")
+async def callback_back_to_reviews_main(callback: CallbackQuery):
+    stats = db_get_reviews_stats()
+    avg_rating = stats["total_stars"] / stats["count"]
+    
+    stars_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⭐", callback_data="rev_1"), InlineKeyboardButton(text="⭐⭐", callback_data="rev_2"), InlineKeyboardButton(text="⭐⭐⭐", callback_data="rev_3")],
+        [InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data="rev_4"), InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data="rev_5")],
+        [InlineKeyboardButton(text="📖 Прочитать отзывы пациентов", callback_data="view_other_reviews")]
+    ])
+    await callback.message.edit_text(
+        f"<b>📊 Динамический рейтинг клиники: {avg_rating:.2f} / 5.00 ⭐</b>\n"
+        f"<i>(Всего получено оценок от пациентов: {stats['count']})</i>\n\n"
+        f"Пожалуйста, оцените качество обслуживания в нашей сети или прочитайте отзывы других людей:", 
+        reply_markup=stars_markup, 
+        parse_mode=ParseMode.HTML
+    )
 
 @router.callback_query(F.data.startswith("rev_"))
 async def process_smart_review(callback: CallbackQuery):
@@ -600,7 +596,7 @@ async def final_submit_booking_handler(callback: CallbackQuery, state: FSMContex
             ])
             await bot.send_message(
                 chat_id=chat_id,
-                text=f"🚨 <b>Поступила новая анкета!</b>\n• Пациент: {data['fullname']}\n• Направление: {direction_label}\n• Трафик: {utm}",
+                text=f"🚨 <b>Поступила новая анкету!</b>\n• Пациент: {data['fullname']}\n• Направление: {direction_label}\n• Трафик: {utm}",
                 reply_markup=admin_markup,
                 parse_mode=ParseMode.HTML
             )
@@ -610,138 +606,8 @@ async def final_submit_booking_handler(callback: CallbackQuery, state: FSMContex
     await state.clear()
 
 # ═══════════════════════════════════════════════════
-#             ИНТАКТИВНАЯ СЛУЖБА ПОДДЕРЖКИ
-# ═══════════════════════════════════════════════════
-
-@router.message(F.text == "ℹ️ Служба поддержки (FAQ)")
-@router.message(F.text == "📞 Связаться с оператором")
-async def support_welcome_handler(message: Message, state: FSMContext):
-    await state.set_state(SupportStates.waiting_for_user_question)
-    res = await message.answer(
-        "👋 <b>Добро пожаловать в службу поддержки клиники ПРАЙМ!</b>\n\n"
-        "Пожалуйста, напишите свой вопрос в чат одним сообщением (например: <i>'Как до вас добраться?'</i> или <i>'Сколько стоит первичный осмотр?'</i>).\n\n"
-        "Я постараюсь найти ответ мгновенно, а если его не окажется в базе знаний — вы сможете передать обращение дежурному администратору.",
-        parse_mode=ParseMode.HTML
-    )
-    await track_msg(message.chat.id, res.message_id)
-
-@router.message(SupportStates.waiting_for_user_question, F.text)
-async def process_user_support_question(message: Message, state: FSMContext):
-    user_text = message.text.strip()
-    faq_answer = search_faq(user_text)
-    
-    if faq_answer:
-        # Умный ответ на базе ключевых слов найден
-        res = await message.answer(
-            f"🔍 <b>Найден автоматический ответ в Базе Знаний:</b>\n\n{faq_answer}",
-            parse_mode=ParseMode.HTML
-        )
-        await track_msg(message.chat.id, res.message_id)
-        await state.clear()
-    else:
-        # Ответ не найден, сохраняем вопрос во временную память FSM
-        await state.update_data(saved_question=html.escape(user_text))
-        
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📮 Отправить оператору", callback_data="send_to_operator")],
-            [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_support")]
-        ])
-        
-        res = await message.answer(
-            "🔍 <b>Я не нашел точного ответа на этот вопрос в автоматической базе знаний клиники.</b>\n\n"
-            "Желаете перенаправить ваше обращение дежурному администратору? Ответ поступит прямо в этот чат.",
-            reply_markup=kb,
-            parse_mode=ParseMode.HTML
-        )
-        await track_msg(message.chat.id, res.message_id)
-
-@router.callback_query(F.data == "send_to_operator")
-async def send_ticket_to_admin(callback: CallbackQuery, state: FSMContext):
-    user_data = await state.get_data()
-    question = user_data.get("saved_question", "Вопрос не распознан...")
-    
-    user_id = callback.from_user.id
-    username = f"@{callback.from_user.username}" if callback.from_user.username else "нет юзернейма"
-    full_name = callback.from_user.full_name
-
-    # Зашиваем ID пользователя в callback_data кнопки админа, чтобы бот знал кому ответить
-    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✍️ Ответить пациенту", callback_data=f"ticket_reply_{user_id}")]
-    ])
-
-    targets = list(ACTIVE_ADMINS)
-    if ADMIN_CHAT_ID != 0:
-        targets.append(ADMIN_CHAT_ID)
-        
-    for chat_id in set(targets):
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=f"🚨 <b>НОВЫЙ ТИКЕТ В СЛУЖБУ ПОДДЕРЖКИ!</b>\n\n"
-                     f"• <b>Пациент:</b> {full_name} ({username} | ID: <code>{user_id}</code>)\n"
-                     f"• <b>Вопрос:</b> {question}",
-                reply_markup=admin_kb,
-                parse_mode=ParseMode.HTML
-            )
-        except Exception:
-            pass
-            
-    await callback.message.edit_text(
-        "✅ <b>Ваш вопрос успешно передан администратору клиники.</b>\n"
-        "Обычно разбор обращений занимает не более 15 минут. Вы получите уведомление прямо сюда!",
-        parse_mode=ParseMode.HTML
-    )
-    await state.clear()
-
-@router.callback_query(F.data == "cancel_support")
-async def cancel_support_process(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.message.edit_text("❌ Запрос в службу технической поддержки отменен.")
-
-# ═══════════════════════════════════════════════════
 #             АДМИНИСТРАТИВНЫЙ ИНТЕРФЕЙС
 # ═══════════════════════════════════════════════════
-
-# Админ нажимает inline-кнопку "Ответить пациенту" под тикетом
-@router.callback_query(F.data.startswith("ticket_reply_"), IsAdminFilter())
-async def admin_start_reply(callback: CallbackQuery, state: FSMContext):
-    target_user_id = int(callback.data.split("_")[2])
-    
-    await state.update_data(reply_to_user_id=target_user_id)
-    await state.set_state(SupportStates.waiting_for_admin_reply)
-    
-    await callback.message.answer(
-        f"✍️ <b>Режим ответа пациенту (ID: {target_user_id}) запущен.</b>\n"
-        f"Введите текст ответа. Ваше следующее текстовое сообщение будет доставлено ему лично.",
-        parse_mode=ParseMode.HTML
-    )
-    await callback.answer()
-
-# Пересылка ответа от админа обратно пользователю в ЛС
-@router.message(SupportStates.waiting_for_admin_reply, IsAdminFilter(), F.text)
-async def admin_send_reply_to_user(message: Message, state: FSMContext):
-    admin_data = await state.get_data()
-    target_user_id = admin_data.get("reply_to_user_id")
-    
-    if not target_user_id:
-        await message.answer("❌ <b>Ошибка:</b> целевой ID пациента утерян. Попробуйте нажать кнопку ответа заново.")
-        await state.clear()
-        return
-
-    admin_text = message.text.strip()
-    
-    try:
-        await bot.send_message(
-            chat_id=target_user_id,
-            text=f"🔔 <b>Ответ от службы поддержки клиники ПРАЙМ:</b>\n\n{admin_text}",
-            parse_mode=ParseMode.HTML
-        )
-        await message.answer("✅ Ответ успешно доставлен в чат к пациенту!")
-    except Exception as e:
-        logging.error(f"Ошибка пересылки ответа пользователю {target_user_id}: {e}")
-        await message.answer("❌ <b>Не удалось доставить ответ.</b> Скорее всего, пациент заблокировал бота или удалил диалог.")
-        
-    await state.clear()
 
 @router.message(Command("auth"))
 async def cmd_auth_handler(message: Message, state: FSMContext):
@@ -890,6 +756,21 @@ async def user_cabinet(message: Message, state: FSMContext):
     res = await message.answer(cabinet_text, parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
 
+@router.message(F.text == "ℹ️ Служба поддержки (FAQ)")
+async def faq_handler(message: Message, state: FSMContext):
+    instruction = (
+        "<b>📋 Единая база вопросов и ответов</b>\n\n"
+        "Вы можете написать свой вопрос обычным текстом прямо в этот чат, и я постараюсь мгновенно найти ответ в базе знаний клиники ПРАЙМ!\n\n"
+        "<b>Часто запрашиваемые темы для ввода:</b>\n"
+        "• <i>«Где вы находитесь?»</i>\n"
+        "• <i>«Как подготовиться к анализам?»</i>\n"
+        "• <i>«Нужен налоговый вычет»</i>\n"
+        "• <i>«Как оформить больничный лист?»</i>\n\n"
+        "<i>Подача заявок бесплатна. Бот также поддерживает загрузку КТ-снимков для получения второго мнения врача.</i>"
+    )
+    res = await message.answer(instruction, parse_mode=ParseMode.HTML)
+    await track_msg(message.chat.id, res.message_id)
+
 @router.message(F.text == "💰 Цены")
 async def prices_handler(message: Message, state: FSMContext):
     res = await message.answer("<b>💰 Цены:</b>\n• Первичный осмотр: 0 руб (по квоте)\n• Анализ снимков КТ: 0 руб.", parse_mode=ParseMode.HTML)
@@ -898,6 +779,11 @@ async def prices_handler(message: Message, state: FSMContext):
 @router.message(F.text == "📍 Адреса")
 async def address_handler(message: Message, state: FSMContext):
     res = await message.answer("🏥 г. Москва, ул. Центральная, д. 45. Режим работы: 24/7.", parse_mode=ParseMode.HTML)
+    await track_msg(message.chat.id, res.message_id)
+
+@router.message(F.text == "📞 Связаться с оператором")
+async def operator_handler(message: Message, state: FSMContext):
+    res = await message.answer("📞 Переключение на оператора клиники... Пожалуйста, ожидайте.", parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
 
 @router.message(F.text == "💝 Пожертвовать клинике")
@@ -918,10 +804,7 @@ async def render_health_check(request):
 
 async def main():
     init_db()
-    
-    # Подключаем глобальный Middleware для тотального контроля входящего трафика
     dp.message.outer_middleware(AutoMessageTrackerMiddleware())
-    
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
     
