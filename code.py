@@ -20,7 +20,7 @@ from aiogram.types import (
 #          КОНФИГУРАЦИЯ И СИСТЕМНЫЕ НАСТРОЙКИ
 # ═══════════════════════════════════════════════════
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", 0))
+ADMIN_CHAT_ID = 5537838624  
 ADMIN_SECRET_PASSWORD = os.getenv("ADMIN_SECRET_PASSWORD", "prime_secret_2026")
 DB_FILE = "clinic_bot.db"
 
@@ -64,6 +64,7 @@ class BookingStates(StatesGroup):
 class AdminStates(StatesGroup):
     entering_broadcast_text = State()
     choosing_broadcast_segment = State()
+    typing_reply = State()  # Состояние для ввода ответа конкретному пользователю
 
 # ═══════════════════════════════════════════════════
 #             РАБОТА С ЛОКАЛЬНОЙ БАЗОЙ ДАННЫХ
@@ -218,7 +219,6 @@ def db_update_reviews_stats(stars: int):
 # ═══════════════════════════════════════════════════
 
 class AutoMessageTrackerMiddleware(BaseMiddleware):
-    """Глобальный перехватчик: ловит ВСЕ сообщения от пользователя без исключения"""
     async def __call__(self, handler, event: TelegramObject, data: dict):
         if isinstance(event, Message):
             db_track_msg(event.chat.id, event.message_id)
@@ -243,11 +243,9 @@ def get_progress_bar(step: int, total: int = 8) -> str:
     return f"\n<b>Этап:</b> {green_blocks}{white_blocks} {percent}%\n"
 
 async def track_msg(chat_id: int, msg_id: int):
-    """Принудительное сохранение ID сообщений (для ответов бота)"""
     db_track_msg(chat_id, msg_id)
 
 async def clear_chat_history(chat_id: int):
-    """Удаляет всю историю сообщений, хранящуюся в базе данных"""
     messages_to_delete = db_get_chat_history(chat_id)
     for msg_id in messages_to_delete:
         try:
@@ -299,7 +297,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
 
     welcome_text = (
         "<b>🩺 МЕДИЦИНСКИЙ ЦЕНТР «ПРАЙМ»</b>\n"
-        "<blockquote>Добро пожаловать в единую цифровую систему управления Вашим здоровьем. All-in-one платформа для связи с klinikoy.</blockquote>\n"
+        "<blockquote>Добро пожаловать в единую цифровую систему управления Вашим здоровьем. All-in-one платформа для связи с клиникой.</blockquote>\n"
         "Все доступные функции структурированы в нижнем меню взаимодействия.\n\n"
         "⚠️ <i><b>Примечание:</b> Данный бот является исключительно демонстрационным проектом. Медицинский центр «ПРАЙМ» вымышлен, "
         "а система создана для демонстрации технических возможностей автоматизации, обработки FSM-анкет и интеграции с БД.</i>"
@@ -737,6 +735,50 @@ async def process_moderation(callback: CallbackQuery):
             pass
         await callback.message.edit_text(callback.message.text + "\n\n🔴 <b>Вердикт: Анкета отклонена администрацией</b>")
 
+
+# ═══════════════════════════════════════════════════
+#     НОВАЯ СИСТЕМА ДВУСТОРОННЕЙ ПОДДЕРЖКИ (ТИКЕТЫ)
+# ═══════════════════════════════════════════════════
+
+@router.callback_query(F.data.startswith("ans_user_"), IsAdminFilter())
+async def ask_admin_reply(callback: CallbackQuery, state: FSMContext):
+    """Срабатывает, когда админ нажимает кнопку 'Ответить пациенту'"""
+    await callback.answer()
+    target_user_id = int(callback.data.split("_")[2])
+    
+    await state.update_data(reply_target_id=target_user_id)
+    await state.set_state(AdminStates.typing_reply)
+    
+    await callback.message.answer(
+        f"📝 <b>Режим ответа. Введите сообщение для пациента (ID: {target_user_id}):</b>\n\n"
+        f"<i>Пациент получит ваше сообщение мгновенно. Для отмены введите /admin или нажмите кнопку меню.</i>", 
+        parse_mode=ParseMode.HTML
+    )
+
+@router.message(AdminStates.typing_reply, F.text)
+async def send_admin_reply(message: Message, state: FSMContext):
+    """Пересылает введенный админом текст обратно пользователю"""
+    if message.text.startswith("/"):
+        await state.clear()
+        return 
+
+    data = await state.get_data()
+    target_user_id = data.get("reply_target_id")
+    await state.clear()
+
+    reply_text = html.escape(message.text.strip())
+
+    try:
+        await bot.send_message(
+            chat_id=target_user_id,
+            text=f"✉️ <b>Ответ от службы поддержки клиники ПРАЙМ:</b>\n\n{reply_text}",
+            parse_mode=ParseMode.HTML
+        )
+        await message.answer("✅ Ответ успешно доставлен пациенту.")
+    except Exception as e:
+        await message.answer(f"❌ <b>Ошибка доставки.</b> Возможно, пользователь заблокировал бота.\nПодробнее: {e}", parse_mode=ParseMode.HTML)
+
+
 # ═══════════════════════════════════════════════════
 #          ШТАТНЫЕ ИНФОРМАЦИОННЫЕ ХЭНДЛЕРЫ
 # ═══════════════════════════════════════════════════
@@ -766,7 +808,7 @@ async def faq_handler(message: Message, state: FSMContext):
         "• <i>«Как подготовиться к анализам?»</i>\n"
         "• <i>«Нужен налоговый вычет»</i>\n"
         "• <i>«Как оформить больничный лист?»</i>\n\n"
-        "<i>Подача заявок бесплатна. Бот также поддерживает загрузку КТ-снимков для получения второго мнения врача.</i>"
+        "✍️ <b>Просто напишите ваш кастомный вопрос сообщением ниже, и оператор ответит вам.</b>"
     )
     res = await message.answer(instruction, parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
@@ -783,8 +825,28 @@ async def address_handler(message: Message, state: FSMContext):
 
 @router.message(F.text == "📞 Связаться с оператором")
 async def operator_handler(message: Message, state: FSMContext):
-    res = await message.answer("📞 Переключение на оператора клиники... Пожалуйста, ожидайте.", parse_mode=ParseMode.HTML)
+    res = await message.answer("📞 <b>Запрос отправлен оператору.</b> Напишите ваш вопрос следующим сообщением, и свободный сотрудник подключится к чату.", parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
+    
+    # Оповещаем администраторов о вызове оператора
+    targets = list(ACTIVE_ADMINS)
+    if ADMIN_CHAT_ID != 0:
+        targets.append(ADMIN_CHAT_ID)
+        
+    reply_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💬 Подключиться к чату", callback_data=f"ans_user_{message.from_user.id}")]
+    ])
+    
+    for chat_id in set(targets):
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"📞 <b>ВЫЗОВ ОПЕРАТОРА</b>\n\n• Пациент: {message.from_user.full_name} (ID: {message.from_user.id})\n• Статус: Ожидает сотрудника.",
+                reply_markup=reply_kb,
+                parse_mode=ParseMode.HTML
+            )
+        except Exception:
+            pass
 
 @router.message(F.text == "💝 Пожертвовать клинике")
 async def donation_menu(message: Message, state: FSMContext):
@@ -794,6 +856,50 @@ async def donation_menu(message: Message, state: FSMContext):
     ])
     res = await message.answer("💝 Вы можете внести благотворительный взнос на развитие IT-инфраструктуры в Telegram Stars:", reply_markup=donation_kb)
     await track_msg(message.chat.id, res.message_id)
+
+
+# ═══════════════════════════════════════════════════
+#  ГЛОБАЛЬНЫЙ ПЕРЕХВАТЧИК СЛУЧАЙНОГО ТЕКСТА (ВОПРОСОВ)
+# ═══════════════════════════════════════════════════
+
+@router.message(F.text)
+async def handle_user_question(message: Message, state: FSMContext):
+    """Ловит любой текст, который не является кнопкой или командой, и шлет админам"""
+    menu_buttons = [
+        "🩺 Оставить заявку на прием", "👤 Личный кабинет", "⭐ Отзывы клиники",
+        "ℹ️ Служба поддержки (FAQ)", "📞 Связаться с оператором", "💰 Цены",
+        "📍 Адреса", "💝 Пожертвовать клинике"
+    ]
+    # Если это кнопка меню или команда — пропускаем хэндлер
+    if message.text in menu_buttons or message.text.startswith("/"):
+        return 
+
+    user_id = message.from_user.id
+    question = html.escape(message.text.strip())
+
+    # Подтверждаем пользователю получение
+    res = await message.answer("✨ <b>Ваш вопрос отправлен дежурному оператору клиники!</b>\nОтвет придет в этот чат в ближайшее время.", parse_mode=ParseMode.HTML)
+    await track_msg(message.chat.id, res.message_id)
+
+    # Отправляем тикет в админ-чаты
+    targets = list(ACTIVE_ADMINS)
+    if ADMIN_CHAT_ID != 0:
+        targets.append(ADMIN_CHAT_ID)
+
+    reply_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✍️ Ответить пациенту", callback_data=f"ans_user_{user_id}")]
+    ])
+
+    for chat_id in set(targets):
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"❓ <b>НОВЫЙ ЗАПРОС В ПОДДЕРЖКУ</b>\n\n• <b>От:</b> {message.from_user.full_name} (ID: {user_id})\n• <b>Текст:</b> {question}",
+                reply_markup=reply_kb,
+                parse_mode=ParseMode.HTML
+            )
+        except Exception:
+            pass
 
 # ═══════════════════════════════════════════════════
 #                ТОЧКА ВХОДА В ПРОГРАММУ
@@ -819,7 +925,7 @@ async def main():
     except Exception:
         pass
 
-    print("🚀 Бот запущен с Middleware-логированием истории в SQLite БД!")
+    print("🚀 Бот запущен с интерактивной техподдержкой!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
