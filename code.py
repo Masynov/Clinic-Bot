@@ -20,7 +20,7 @@ from aiogram.types import (
 #          КОНФИГУРАЦИЯ И СИСТЕМНЫЕ НАСТРОЙКИ
 # ═══════════════════════════════════════════════════
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_CHAT_ID = 5537838624  
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", 0))  
 ADMIN_SECRET_PASSWORD = os.getenv("ADMIN_SECRET_PASSWORD", "prime_secret_2026")
 DB_FILE = "clinic_bot.db"
 
