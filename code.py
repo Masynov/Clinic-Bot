@@ -13,7 +13,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     Message, CallbackQuery, PreCheckoutQuery, LabeledPrice, TelegramObject,
-    ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+    ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 )
 
 # ═══════════════════════════════════════════════════
@@ -23,6 +23,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", 0))  
 ADMIN_SECRET_PASSWORD = os.getenv("ADMIN_SECRET_PASSWORD", "prime_secret_2026")
 DB_FILE = "clinic_bot.db"
+
+# Ссылка на ваше веб-приложение (Mini App) на GitHub Pages
+MINI_APP_URL = "https://masynov.github.io/Clinic-Bot/"
 
 ACTIVE_ADMINS = set()
 
@@ -261,6 +264,7 @@ async def clear_chat_history(chat_id: int):
 def get_full_main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
+            [KeyboardButton(text="🚀 Открыть Mini App", web_app=WebAppInfo(url=MINI_APP_URL))],
             [KeyboardButton(text="🩺 Оставить заявку на прием")],
             [KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="⭐ Отзывы клиники")],
             [KeyboardButton(text="ℹ️ Служба поддержки (FAQ)"), KeyboardButton(text="📞 Связаться с оператором")],
@@ -302,8 +306,18 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
         "⚠️ <i><b>Примечание:</b> Данный бот является исключительно демонстрационным проектом. Медицинский центр «ПРАЙМ» вымышлен, "
         "а система создана для демонстрации технических возможностей автоматизации, обработки FSM-анкет и интеграции с БД.</i>"
     )
-    res = await message.answer(welcome_text, reply_markup=get_full_main_menu(), parse_mode=ParseMode.HTML)
+    
+    # Инлайн-кнопка для быстрого открытия Mini App прямо под приветствием
+    start_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Запустить Mini App", web_app=WebAppInfo(url=MINI_APP_URL))]
+    ])
+
+    res = await message.answer(welcome_text, reply_markup=start_kb, parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
+    
+    # Отправляем клавиатуру главного меню отдельным сообщением, чтобы зафиксировать кнопки снизу
+    menu_res = await message.answer("Главное меню:", reply_markup=get_full_main_menu())
+    await track_msg(message.chat.id, menu_res.message_id)
 
 # ═══════════════════════════════════════════════════
 #         ДИНАМИЧЕСКАЯ СИСТЕМА ОТЗЫВОВ
@@ -866,7 +880,7 @@ async def donation_menu(message: Message, state: FSMContext):
 async def handle_user_question(message: Message, state: FSMContext):
     """Ловит любой текст, который не является кнопкой или командой, и шлет админам"""
     menu_buttons = [
-        "🩺 Оставить заявку на прием", "👤 Личный кабинет", "⭐ Отзывы клиники",
+        "🚀 Открыть Mini App", "🩺 Оставить заявку на прием", "👤 Личный кабинет", "⭐ Отзывы клиники",
         "ℹ️ Служба поддержки (FAQ)", "📞 Связаться с оператором", "💰 Цены",
         "📍 Адреса", "💝 Пожертвовать клинике"
     ]
