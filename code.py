@@ -22,7 +22,7 @@ from aiogram.types import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", 0))  
 ADMIN_SECRET_PASSWORD = os.getenv("ADMIN_SECRET_PASSWORD", "prime_secret_2026")
-DB_FILE = "clinic_bot.db"
+DB_FILE = os.getenv("DB_FILE", "clinic_bot.db")
 
 # Ссылка на ваше веб-приложение (Mini App) на GitHub Pages
 MINI_APP_URL = "https://masynov.github.io/Clinic-Bot/"
