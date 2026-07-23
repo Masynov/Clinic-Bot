@@ -14,7 +14,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     Message, CallbackQuery, TelegramObject,
-    ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+    ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo,
+    LabeledPrice, PreCheckoutQuery
 )
 
 # ═══════════════════════════════════════════════════
@@ -319,7 +320,6 @@ async def user_cabinet(message: Message, state: FSMContext):
     utm = user_data.get("utm_source") or "Прямой переход"
     last_dir = user_data.get("last_direction") or "Нет активных направлений"
 
-    # Формирование статуса заявки из БД
     if app_data:
         app_status_text = (
             f"\n\n<b>📋 ТЕКУЩАЯ ЗАЯВКА НА ПРИЕМ:</b>\n"
@@ -402,7 +402,6 @@ async def refresh_cabinet_handler(callback: CallbackQuery):
 
 @router.message(F.web_app_data)
 async def handle_web_app_data(message: Message):
-    """Ловит отправленные через Telegram.WebApp.sendData() из фронтенда данные"""
     try:
         raw_json = message.web_app_data.data
         data = json.loads(raw_json)
@@ -697,7 +696,6 @@ async def final_submit_booking_handler(callback: CallbackQuery, state: FSMContex
     res = await callback.message.answer(success_text, parse_mode=ParseMode.HTML, reply_markup=get_full_main_menu())
     await track_msg(callback.message.chat.id, res.message_id)
 
-    # Сохраняем заявку и обновляем данные профиля
     await db_add_application(
         user_id=callback.from_user.id,
         fullname=data['fullname'],
@@ -863,7 +861,7 @@ async def adm_execute_broadcast(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(f"📢 Рассылка завершена успешно. Сообщение доставлено {count} пациентам.")
 
 # ═══════════════════════════════════════════════════
-#     НОВАЯ СИСТЕМА ДВУСТОРОННЕЙ ПОДДЕРЖКИ (ТИКЕТЫ)
+#     СИСТЕМА ДВУСТОРОННЕЙ ПОДДЕРЖКИ И TELEGRAM STARS
 # ═══════════════════════════════════════════════════
 
 @router.callback_query(F.data.startswith("ans_user_"), IsAdminFilter())
@@ -901,6 +899,36 @@ async def send_admin_reply(message: Message, state: FSMContext):
         await message.answer("✅ Ответ успешно доставлен пациенту.")
     except Exception as e:
         await message.answer(f"❌ <b>Ошибка доставки.</b> Подробнее: {e}", parse_mode=ParseMode.HTML)
+
+@router.callback_query(F.data.startswith("donate_"))
+async def process_donation_invoice(callback: CallbackQuery):
+    amount = int(callback.data.split("_")[1])
+    await callback.answer()
+    try:
+        await callback.message.answer_invoice(
+            title="Поддержка IT-инфраструктуры клиники",
+            description=f"Благотворительный взнос на развитие цифровой платформы в размере {amount} Telegram Stars ⭐",
+            payload=f"clinic_donation_{amount}",
+            currency="XTR",
+            prices=[LabeledPrice(label=f"Взнос {amount} Звезд", amount=amount)]
+        )
+    except Exception as e:
+        logging.error(f"Ошибка создания инвойса Stars: {e}")
+        await callback.message.answer("⚠️ Не удалось сформировать счет на оплату. Убедитесь, что бот настроен для работы с Telegram Stars.")
+
+@router.pre_checkout_query()
+async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
+    await pre_checkout_query.answer(ok=True)
+
+@router.message(F.successful_payment)
+async def successful_payment_handler(message: Message):
+    payment = message.successful_payment
+    await message.answer(
+        f"💖 <b>Огромное спасибо за вашу поддержку!</b>\n"
+        f"Платеж на сумму <b>{payment.total_amount} Telegram Stars ⭐️</b> успешно проведен.\n"
+        f"Средства направлены на развитие IT-инфраструктуры клиники.",
+        parse_mode=ParseMode.HTML
+    )
 
 # ═══════════════════════════════════════════════════
 #          ШТАТНЫЕ ИНФОРМАЦИОННЫЕ ХЭНДЛЕРЫ
@@ -1026,7 +1054,7 @@ async def main():
     except Exception as e:
         logging.warning(f"Не удалось запустить веб-сервер на порту {port}: {e}")
 
-    print("🚀 Бот запущен с асинхронной БД и обновленным Личным Кабинетом!")
+    print("🚀 Бот запущен с асинхронной БД, Личным Кабинетом и поддержкой Telegram Stars!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
