@@ -1,5 +1,7 @@
+HTML
 <!DOCTYPE html>
 <html lang="ru">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -28,29 +30,58 @@
             padding: 16px;
             background: var(--card-bg);
             text-align: center;
-            border-bottom: 1px solid rgba(0,0,0,0.05);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
         }
 
-        .header h2 { margin: 0; font-size: 20px; }
-        .header p { margin: 4px 0 0; font-size: 13px; color: var(--hint-color); }
+        .header h2 {
+            margin: 0;
+            font-size: 20px;
+        }
 
-        .container { padding: 16px; max-width: 600px; margin: auto; }
+        .header p {
+            margin: 4px 0 0;
+            font-size: 13px;
+            color: var(--hint-color);
+        }
 
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
+        .container {
+            padding: 16px;
+            max-width: 600px;
+            margin: auto;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
 
         .card {
             background: var(--card-bg);
             border-radius: 12px;
             padding: 16px;
             margin-bottom: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
         }
 
-        .card h3 { margin-top: 0; font-size: 16px; color: var(--button-color); }
+        .card h3 {
+            margin-top: 0;
+            font-size: 16px;
+            color: var(--button-color);
+        }
 
-        label { display: block; font-size: 13px; color: var(--hint-color); margin-bottom: 6px; }
-        input, select {
+        label {
+            display: block;
+            font-size: 13px;
+            color: var(--hint-color);
+            margin-bottom: 6px;
+        }
+
+        input,
+        select,
+        textarea {
             width: 100%;
             padding: 10px;
             border-radius: 8px;
@@ -59,6 +90,12 @@
             color: var(--text-color);
             margin-bottom: 12px;
             box-sizing: border-box;
+            font-family: inherit;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 60px;
         }
 
         .slots-grid {
@@ -77,10 +114,13 @@
             text-align: center;
             cursor: pointer;
             font-size: 14px;
+            transition: all 0.2s ease;
         }
+
         .slot-btn.selected {
             background: var(--button-color);
             color: var(--button-text-color);
+            font-weight: bold;
         }
 
         .btn {
@@ -93,9 +133,15 @@
             font-weight: bold;
             cursor: pointer;
             font-size: 15px;
+            transition: opacity 0.2s ease;
         }
 
-        /* Навигационная панель снизу */
+        .btn:disabled {
+            background: #b0bec5 !important;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
         .nav-bar {
             position: fixed;
             bottom: 0;
@@ -105,7 +151,7 @@
             display: flex;
             justify-content: space-around;
             padding: 8px 0;
-            border-top: 1px solid rgba(0,0,0,0.1);
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
             box-sizing: border-box;
         }
 
@@ -116,13 +162,29 @@
             cursor: pointer;
             flex: 1;
         }
+
         .nav-item.active {
             color: var(--button-color);
             font-weight: bold;
         }
-        .nav-icon { font-size: 18px; display: block; margin-bottom: 2px; }
+
+        .nav-icon {
+            font-size: 18px;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .info-badge {
+            background: rgba(36, 129, 204, 0.1);
+            color: var(--button-color);
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 12px;
+        }
     </style>
 </head>
+
 <body>
 
     <div class="header">
@@ -131,20 +193,20 @@
     </div>
 
     <div class="container">
-        
+
         <!-- ВКЛАДКА 1: ИНТЕРАКТИВНАЯ ЗАПИСЬ -->
         <div id="tab-booking" class="tab-content active">
             <div class="card">
                 <h3>📅 Онлайн-запись на прием</h3>
-                
+
                 <label>Выберите специалиста:</label>
-                <select id="doctorSelect">
+                <select id="doctorSelect" onchange="validateBookingForm()">
                     <option value="Иванов И.И. (Кардиолог)">д.м.н. Иванов И.И. (Кардиолог)</option>
                     <option value="Петрова А.С. (Терапевт)">к.м.н. Петрова А.С. (Терапевт)</option>
                 </select>
 
                 <label>Дата приема:</label>
-                <input type="date" id="bookingDate">
+                <input type="date" id="bookingDate" onchange="validateBookingForm()">
 
                 <label>Доступное время:</label>
                 <div class="slots-grid" id="slotsContainer">
@@ -157,28 +219,42 @@
                 </div>
 
                 <label>Контактный телефон:</label>
-                <input type="tel" id="bookingPhone" placeholder="+7 (999) 000-00-00">
+                <input type="tel" id="bookingPhone" placeholder="+7 (999) 000-00-00" oninput="validateBookingForm()">
 
-                <button class="btn" onclick="submitBooking()">Подтвердить запись</button>
+                <button class="btn" id="submitBookingBtn" disabled onclick="submitBooking()">
+                    Подтвердить запись
+                </button>
             </div>
         </div>
 
-        <!-- ВКЛАДКА 2: ЭМК (ЭЛЕКТРОННАЯ МЕДКАРТА) -->
+        <!-- ВКЛАДКА 2: ИНТЕРАКТИВНАЯ ЭМК (ЭЛЕКТРОННАЯ МЕДКАРТА) -->
         <div id="tab-emr" class="tab-content">
             <div class="card">
-                <h3>📋 Электронная медицинская карта</h3>
-                <p><b>Статус:</b> Активна ✅</p>
-                <p><b>Группа крови:</b> A(II) Rh+</p>
-                <hr style="border:0; border-top:1px solid rgba(0,0,0,0.05); margin: 12px 0;">
-                <h4>История и результаты:</h4>
-                <div style="font-size: 14px; margin-bottom: 8px;">
-                    📄 <b>Заключение кардиолога</b> (15.06.2026)<br>
-                    <span style="color: var(--hint-color);">ЭКГ в норме, рекомендован курс витаминов.</span>
+                <h3>📋 Моя Медицинская Карта</h3>
+                <div class="info-badge">
+                    Заполните медицинские данные для формирования электронного профиля пациента.
                 </div>
-                <div style="font-size: 14px;">
-                    🧪 <b>Общий анализ крови</b> (10.05.2026)<br>
-                    <span style="color: var(--hint-color);">Гемоглобин 140 г/л. Показатели стабильные.</span>
-                </div>
+
+                <label>Группа крови и резус-фактор:</label>
+                <select id="emrBloodType">
+                    <option value="Не указана">Не указано</option>
+                    <option value="O(I) Rh+">O(I) Rh+ (Первая положительная)</option>
+                    <option value="O(I) Rh-">O(I) Rh- (Первая отрицательная)</option>
+                    <option value="A(II) Rh+">A(II) Rh+ (Вторая положительная)</option>
+                    <option value="A(II) Rh-">A(II) Rh- (Вторая отрицательная)</option>
+                    <option value="B(III) Rh+">B(III) Rh+ (Третья положительная)</option>
+                    <option value="B(III) Rh-">B(III) Rh- (Третья отрицательная)</option>
+                    <option value="AB(IV) Rh+">AB(IV) Rh+ (Четвертая положительная)</option>
+                    <option value="AB(IV) Rh-">AB(IV) Rh- (Четвертая отрицательная)</option>
+                </select>
+
+                <label>Аллергические реакции:</label>
+                <textarea id="emrAllergies" placeholder="Лекарственные препараты, продукты питания..."></textarea>
+
+                <label>Хронические заболевания / Особенности:</label>
+                <textarea id="emrChronic" placeholder="Укажите диагностированные хронические заболевания..."></textarea>
+
+                <button class="btn" onclick="submitMedCard()">Сохранить медицинскую карту</button>
             </div>
         </div>
 
@@ -189,23 +265,29 @@
                 <p>Пакетные предложения со скидкой до 20%.</p>
                 <hr style="border:0; border-top:1px solid rgba(0,0,0,0.05); margin: 12px 0;">
                 <div style="margin-bottom: 14px;">
-                    <b>❤️ «Здоровое сердце»</b><<br>
-                    <span style="font-size: 13px; color: var(--hint-color);">Прием кардиолога + ЭКГ + Липидограмма</span><br>
+                    <b>❤️ «Здоровое сердце»</b><br>
+                    <span style="font-size: 13px; color: var(--hint-color);">Прием кардиолога + ЭКГ +
+                        Липидограмма</span><br>
                     <b>4 500 руб. / 45 ⭐️</b><br>
-                    <button class="btn" style="margin-top: 8px; padding: 8px;" onclick="buyPackage('Пакет: Здоровое сердце', 45)">Оплатить звёздами</button>
+                    <button class="btn" style="margin-top: 8px; padding: 8px;"
+                        onclick="buyPackage('Пакет: Здоровое сердце', 45)">Оплатить звёздами</button>
                 </div>
             </div>
         </div>
 
-        <!-- ВКЛАДКА 4: ЛОЯЛЬНОСТЬ -->
+        <!-- ВКЛАДКА 4: ИСПРАВЛЕННАЯ ЛОЯЛЬНОСТЬ -->
         <div id="tab-loyalty" class="tab-content">
             <div class="card">
                 <h3>⭐ Программа лояльности</h3>
-                <p style="font-size: 24px; font-weight: bold; color: var(--button-color); margin: 8px 0;">350 баллов</p>
+                <p style="font-size: 26px; font-weight: bold; color: var(--button-color); margin: 8px 0;"
+                    id="userPointsText">
+                    ... баллов
+                </p>
                 <p style="font-size: 13px; color: var(--hint-color);">Кэшбэк 5% с каждого посещения клиники.</p>
                 <hr style="border:0; border-top:1px solid rgba(0,0,0,0.05); margin: 12px 0;">
                 <h4>Реферальная программа:</h4>
-                <p style="font-size: 13px;">Пригласите друга и получите <b>200 баллов</b> на ваш счет после его визита.</p>
+                <p style="font-size: 13px;">Пригласите друга и получите <b>200 баллов</b> на ваш счет сразу после его
+                    регистрации!</p>
                 <button class="btn" onclick="copyRefLink()">Скопировать реферальную ссылку</button>
             </div>
         </div>
@@ -234,29 +316,55 @@
 
         let selectedTime = null;
 
+        // Устанавливаем сегодняшнюю дату по умолчанию
+        document.getElementById('bookingDate').valueAsDate = new Date();
+
         function switchTab(tabId, element) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-            
+
             document.getElementById('tab-' + tabId).classList.add('active');
             element.classList.add('active');
         }
 
+        // 1. ВАЛИДАЦИЯ И АКТИВАЦИЯ КНОПКИ ПОДТВЕРЖДЕНИЯ
         function selectSlot(element) {
             document.querySelectorAll('.slot-btn').forEach(el => el.classList.remove('selected'));
             element.classList.add('selected');
             selectedTime = element.innerText;
+            validateBookingForm();
+        }
+
+        function validateBookingForm() {
+            const date = document.getElementById('bookingDate').value;
+            const phone = document.getElementById('bookingPhone').value.trim();
+            const submitBtn = document.getElementById('submitBookingBtn');
+
+            // Очищаем номер от нецифровых символов для проверки длины (10 или 11 цифр)
+            const cleanPhone = phone.replace(/\D/g, '');
+            const isPhoneValid = cleanPhone.length >= 10 && cleanPhone.length <= 11;
+
+            if (date && selectedTime && isPhoneValid) {
+                submitBtn.disabled = false;
+                submitBtn.innerText = "Подтвердить запись";
+            } else {
+                submitBtn.disabled = true;
+                if (!selectedTime) {
+                    submitBtn.innerText = "Выберите время приема";
+                } else if (!isPhoneValid) {
+                    submitBtn.innerText = "Введите корректный телефон";
+                } else {
+                    submitBtn.innerText = "Заполните все поля";
+                }
+            }
         }
 
         function submitBooking() {
             const doctor = document.getElementById('doctorSelect').value;
             const date = document.getElementById('bookingDate').value;
-            const phone = document.getElementById('bookingPhone').value;
+            const phone = document.getElementById('bookingPhone').value.trim();
 
-            if (!date || !selectedTime || !phone) {
-                alert('Пожалуйста, заполните дату, выберите время и укажите телефон!');
-                return;
-            }
+            if (!date || !selectedTime || !phone) return;
 
             const data = {
                 action: "mini_app_booking",
@@ -264,6 +372,22 @@
                 date: date,
                 time: selectedTime,
                 phone: phone
+            };
+
+            tg.sendData(JSON.stringify(data));
+        }
+
+        // 2. ИНТЕРАКТИВНОЕ СОХРАНЕНИЕ МЕДКАРТЫ
+        function submitMedCard() {
+            const bloodType = document.getElementById('emrBloodType').value;
+            const allergies = document.getElementById('emrAllergies').value.trim() || 'Не указано';
+            const chronic = document.getElementById('emrChronic').value.trim() || 'Не указано';
+
+            const data = {
+                action: "update_medcard",
+                blood_type: bloodType,
+                allergies: allergies,
+                chronic_diseases: chronic
             };
 
             tg.sendData(JSON.stringify(data));
@@ -278,13 +402,55 @@
             tg.sendData(JSON.stringify(data));
         }
 
+        // 3. ИСПРАВЛЕННАЯ РЕФЕРАЛЬНАЯ СИСТЕМА
         function copyRefLink() {
             const userId = tg.initDataUnsafe?.user?.id || '000000';
-            const refLink = `https://t.me/your_bot_username?start=ref_${userId}`;
-            navigator.clipboard.writeText(refLink).then(() => {
-                alert('Реферальная ссылка скопирована в буфер обмена!');
-            });
+            const botUsername = "your_bot_username"; // Вкажите имя вашего бота без символа @
+            const refLink = `https://t.me/${botUsername}?start=ref_${userId}`;
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(refLink).then(() => {
+                    tg.showAlert('✅ Реферальная ссылка скопирована!');
+                }).catch(() => {
+                    prompt('Скопируйте вашу реферальную ссылку:', refLink);
+                });
+            } else {
+                prompt('Скопируйте вашу реферальную ссылку:', refLink);
+            }
         }
+
+        // Автоматическая загрузка профиля и баллов пользователя при открытии
+        async function loadUserProfile() {
+            const userId = tg.initDataUnsafe?.user?.id;
+            if (!userId) {
+                document.getElementById('userPointsText').innerText = '0 баллов';
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/profile/${userId}`);
+                if (response.ok) {
+                    const res = await response.json();
+                    if (res.user) {
+                        document.getElementById('userPointsText').innerText = `${res.user.points || 0} баллов`;
+                        if (res.user.phone) {
+                            document.getElementById('bookingPhone').value = res.user.phone;
+                        }
+                    }
+                    if (res.medcard) {
+                        if (res.medcard.blood_type) document.getElementById('emrBloodType').value = res.medcard.blood_type;
+                        if (res.medcard.allergies && res.medcard.allergies !== 'Не указано') document.getElementById('emrAllergies').value = res.medcard.allergies;
+                        if (res.medcard.chronic_diseases && res.medcard.chronic_diseases !== 'Не указано') document.getElementById('emrChronic').value = res.medcard.chronic_diseases;
+                    }
+                }
+            } catch (e) {
+                console.error("Ошибка загрузки профиля:", e);
+                document.getElementById('userPointsText').innerText = '0 баллов';
+            }
+        }
+
+        loadUserProfile();
     </script>
 </body>
+
 </html>

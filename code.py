@@ -26,7 +26,6 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", 0))
 ADMIN_SECRET_PASSWORD = os.getenv("ADMIN_SECRET_PASSWORD", "prime_secret_2026")
 DB_FILE = os.getenv("DB_FILE", "clinic_bot.db")
 
-# Ссылка на веб-приложение (Mini App) на GitHub Pages
 MINI_APP_URL = "https://masynov.github.io/Clinic-Bot/"
 
 ACTIVE_ADMINS = set()
@@ -101,7 +100,6 @@ async def init_db():
                 points INTEGER DEFAULT 0
             )
         """)
-        # Миграция поля points, если таблица была создана ранее
         try:
             await conn.execute("ALTER TABLE users ADD COLUMN points INTEGER DEFAULT 0")
         except Exception:
@@ -368,7 +366,7 @@ def get_skip_kb(callback_action: str) -> InlineKeyboardMarkup:
     ])
 
 # ═══════════════════════════════════════════════════
-#             ОБНОВЛЕННАЯ КОМАНДА /START
+#             ОБНОВЛЕННАЯ КОМАНДА /START + РЕФЕРАЛЫ
 # ═══════════════════════════════════════════════════
 
 @router.message(Command("start"))
@@ -376,8 +374,35 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
     await clear_chat_history(message.chat.id)
     await state.clear()
 
-    utm_source = command.args if command.args else "Прямой переход"
-    await db_register_user(message.from_user.id, message.from_user.full_name, utm_source)
+    user_id = message.from_user.id
+    raw_args = command.args or ""
+    referrer_id = None
+
+    # Обработка реферального параметра ref_12345678
+    if raw_args.startswith("ref_"):
+        try:
+            referrer_id = int(raw_args.replace("ref_", ""))
+        except ValueError:
+            pass
+
+    existing_user = await db_get_user(user_id)
+    utm_source = raw_args if raw_args else "Прямой переход"
+
+    if not existing_user:
+        await db_register_user(user_id, message.from_user.full_name, utm_source)
+        
+        # Если пришел по реферальной ссылке нового пользователя
+        if referrer_id and referrer_id != user_id:
+            await db_add_points(referrer_id, 200) # +200 рефереру
+            await db_add_points(user_id, 50)       # +50 новому клиенту
+            try:
+                await bot.send_message(
+                    chat_id=referrer_id,
+                    text=f"🎉 <b>Новый реферал!</b> Пользователь {html.escape(message.from_user.full_name)} зарегистрировался по вашей ссылке. Вам начислено 💎 <b>+200 баллов</b>!",
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception:
+                pass
 
     welcome_text = (
         "<b>🩺 МЕДИЦИНСКИЙ ЦЕНТР «ПРАЙМ»</b>\n"
@@ -433,7 +458,7 @@ async def user_cabinet(message: Message, state: FSMContext):
         f"• <b>Предпочтительное отделение:</b> {last_dir}"
         f"{app_status_text}\n\n"
         "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        "💡 <i>Баллами можно оплачивать услуги клиники. Зарабатывайте баллы, записываясь на прием и оставляя отзывы!</i>"
+        "💡 <i>Баллами можно оплачивать услуги клиники. Зарабатывайте баллы, записываясь на прием и приглашая друзей!</i>"
     )
 
     cabinet_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -539,8 +564,6 @@ async def show_medcard_handler(event: Message | CallbackQuery):
         res = await event.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await track_msg(event.from_user.id, res.message_id)
 
-# --- ФОРМА ЗАПОЛНЕНИЯ МЕДКАРТЫ ПАЦИЕНТОМ (FSM) ---
-
 @router.callback_query(F.data == "fill_patient_medcard")
 async def start_patient_medcard(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -637,7 +660,6 @@ async def process_doctor_prescriptions(message: Message, state: FSMContext):
     res = await message.answer(f"✅ <b>Медкарта пациента ID {target_id} успешно обновлена!</b>", parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
 
-    # Уведомляем пациента
     try:
         await bot.send_message(
             chat_id=target_id,
@@ -676,15 +698,27 @@ async def handle_web_app_data(message: Message):
             )
             await message.answer("🏥 <b>Электронная медкарта успешно обновлена из Mini App!</b>", parse_mode=ParseMode.HTML)
 
-        elif action == "quick_booking":
-            direction = data.get("direction", "Общая диагностика")
+        elif action in ["quick_booking", "mini_app_booking"]:
+            doctor = data.get("doctor", "Врач клиники")
+            date = data.get("date", "")
+            time = data.get("time", "")
             phone = data.get("phone", "Не указан")
-            await db_add_application(user_id, message.from_user.full_name, phone, direction, "Mini App Direct", "Заявка создана через Mini App", None)
             
-            # Начисляем 100 баллов за заявку из Mini App
+            comment = f"Запись через Mini App к {doctor} на {date} в {time}"
+            await db_add_application(user_id, message.from_user.full_name, phone, doctor, "Mini App Direct", comment, None)
+            await db_update_user_profile(user_id, fullname=message.from_user.full_name, phone=phone)
+            
+            # Начисляем 100 баллов за запись через Mini App
             await db_add_points(user_id, 100)
             
-            await message.answer("🚀 <b>Ваша заявка из Mini App принята!</b> Вам начислено <b>+100 баллов</b> лояльности 💎", parse_mode=ParseMode.HTML)
+            await message.answer(
+                f"🚀 <b>Ваша запись принята!</b>\n"
+                f"• Специалист: {doctor}\n"
+                f"• Дата и время: {date} в {time}\n"
+                f"• Телефон: <code>{phone}</code>\n\n"
+                f"Вам начислено 💎 <b>+100 баллов</b> лояльности!",
+                parse_mode=ParseMode.HTML
+            )
             
         else:
             await message.answer(f"📥 <b>Получены данные из веб-приложения:</b>\n<code>{html.escape(raw_json)}</code>", parse_mode=ParseMode.HTML)
@@ -757,7 +791,6 @@ async def process_smart_review(callback: CallbackQuery):
     await callback.answer()
     
     await db_update_reviews_stats(rating)
-    # Начисляем 50 баллов за отзыв
     await db_add_points(callback.from_user.id, 50)
 
     stats = await db_get_reviews_stats()
@@ -824,7 +857,7 @@ async def process_direction(callback: CallbackQuery, state: FSMContext):
     if direction == "dir_cardio":
         buttons.append([InlineKeyboardButton(text="👨‍⚕️ д.м.н. Иванов И.И.", callback_data="doc_cardio_1")])
     elif direction == "dir_therapy":
-        buttons.append([InlineKeyboardButton(text="👩‍⚕️ к.м.н.  Петрова А.С.", callback_data="doc_ther_1")])
+        buttons.append([InlineKeyboardButton(text="👩‍⚕️ к.м.н. Петрова А.С.", callback_data="doc_ther_1")])
     buttons.append([InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_booking")])
     
     await callback.message.edit_text(f"{progress}\n<b>Шаг 2 из 8:</b> Выберите лечащего специалиста:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
@@ -952,7 +985,6 @@ async def final_submit_booking_handler(callback: CallbackQuery, state: FSMContex
     utm = profile.get("utm_source", "Прямой переход")
     direction_label = "Кардиология" if data['direction'] == "dir_cardio" else "Терапия"
 
-    # Начисляем 100 баллов за успешную запись
     await db_add_points(callback.from_user.id, 100)
 
     success_text = (
@@ -1245,7 +1277,6 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
 @router.message(F.successful_payment)
 async def successful_payment_handler(message: Message):
     payment = message.successful_payment
-    # Начисляем 200 баллов за донат
     await db_add_points(message.from_user.id, 200)
 
     await message.answer(
@@ -1424,7 +1455,7 @@ async def handle_post_medcard_api(request):
     try:
         data = await request.json()
         user_id = int(data.get("user_id"))
-        author_role = data.get("role", "patient") # 'patient' или 'doctor'
+        author_role = data.get("role", "patient")
         
         if author_role == "doctor":
             await db_update_medcard(
@@ -1492,8 +1523,6 @@ async def main():
     app.router.add_get("/api/doctors", handle_get_doctors)
     app.router.add_post("/api/booking", handle_api_booking)
     app.router.add_get("/api/profile/{user_id}", handle_get_profile)
-    
-    # Новые эндпоинты для системы баллов и медкарты
     app.router.add_get("/api/medcard/{user_id}", handle_get_medcard_api)
     app.router.add_post("/api/medcard", handle_post_medcard_api)
     app.router.add_post("/api/points", handle_post_points_api)
