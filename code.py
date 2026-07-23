@@ -1,9 +1,10 @@
 import os
 import re
 import html
+import json
 import logging
 import asyncio
-import sqlite3
+import aiosqlite
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
 from aiogram.enums import ParseMode
@@ -12,7 +13,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
-    Message, CallbackQuery, PreCheckoutQuery, LabeledPrice, TelegramObject,
+    Message, CallbackQuery, TelegramObject,
     ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 )
 
@@ -24,7 +25,7 @@ ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID", 0))
 ADMIN_SECRET_PASSWORD = os.getenv("ADMIN_SECRET_PASSWORD", "prime_secret_2026")
 DB_FILE = os.getenv("DB_FILE", "clinic_bot.db")
 
-# Ссылка на ваше веб-приложение (Mini App) на GitHub Pages
+# Ссылка на веб-приложение (Mini App) на GitHub Pages
 MINI_APP_URL = "https://masynov.github.io/Clinic-Bot/"
 
 ACTIVE_ADMINS = set()
@@ -67,155 +68,142 @@ class BookingStates(StatesGroup):
 class AdminStates(StatesGroup):
     entering_broadcast_text = State()
     choosing_broadcast_segment = State()
-    typing_reply = State()  # Состояние для ввода ответа конкретному пользователю
+    typing_reply = State()
 
 # ═══════════════════════════════════════════════════
-#             РАБОТА С ЛОКАЛЬНОЙ БАЗОЙ ДАННЫХ
+#        АСИНХРОННАЯ РАБОТА С СУБД (AIOSQLITE)
 # ═══════════════════════════════════════════════════
 
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            fullname TEXT,
-            utm_source TEXT,
-            last_direction TEXT
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS chat_history (
-            chat_id INTEGER,
-            message_id INTEGER,
-            PRIMARY KEY (chat_id, message_id)
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS applications (
-            user_id INTEGER PRIMARY KEY,
-            fullname TEXT,
-            phone TEXT,
-            direction TEXT,
-            utm_source TEXT,
-            comment TEXT,
-            file_id TEXT
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS reviews_stats (
-            id INTEGER PRIMARY KEY,
-            total_stars INTEGER,
-            count INTEGER
-        )
-    """)
-    cursor.execute("SELECT COUNT(*) FROM reviews_stats")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO reviews_stats (id, total_stars, count) VALUES (1, 493, 100)")
+async def init_db():
+    async with aiosqlite.connect(DB_FILE) as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                fullname TEXT,
+                phone TEXT,
+                utm_source TEXT,
+                last_direction TEXT
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS chat_history (
+                chat_id INTEGER,
+                message_id INTEGER,
+                PRIMARY KEY (chat_id, message_id)
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS applications (
+                user_id INTEGER PRIMARY KEY,
+                fullname TEXT,
+                phone TEXT,
+                direction TEXT,
+                utm_source TEXT,
+                comment TEXT,
+                file_id TEXT,
+                status TEXT
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS reviews_stats (
+                id INTEGER PRIMARY KEY,
+                total_stars INTEGER,
+                count INTEGER
+            )
+        """)
         
-    conn.commit()
-    conn.close()
+        async with conn.execute("SELECT COUNT(*) FROM reviews_stats") as cursor:
+            row = await cursor.fetchone()
+            if not row or row[0] == 0:
+                await conn.execute("INSERT INTO reviews_stats (id, total_stars, count) VALUES (1, 493, 100)")
+                
+        await conn.commit()
 
-def db_track_msg(chat_id: int, message_id: int):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO chat_history (chat_id, message_id) VALUES (?, ?)", (chat_id, message_id))
-    conn.commit()
-    conn.close()
+async def db_track_msg(chat_id: int, message_id: int):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        await conn.execute("INSERT OR IGNORE INTO chat_history (chat_id, message_id) VALUES (?, ?)", (chat_id, message_id))
+        await conn.commit()
 
-def db_get_chat_history(chat_id: int):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT message_id FROM chat_history WHERE chat_id = ?", (chat_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [r[0] for r in rows]
+async def db_get_chat_history(chat_id: int):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        async with conn.execute("SELECT message_id FROM chat_history WHERE chat_id = ?", (chat_id,)) as cursor:
+            rows = await cursor.fetchall()
+            return [r[0] for r in rows]
 
-def db_clear_chat_history(chat_id: int):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM chat_history WHERE chat_id = ?", (chat_id,))
-    conn.commit()
-    conn.close()
+async def db_clear_chat_history(chat_id: int):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        await conn.execute("DELETE FROM chat_history WHERE chat_id = ?", (chat_id,))
+        await conn.commit()
 
-def db_register_user(user_id: int, fullname: str, utm_source: str):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, fullname, utm_source, last_direction) VALUES (?, ?, ?, NULL)", (user_id, fullname, utm_source))
-    conn.commit()
-    conn.close()
+async def db_register_user(user_id: int, fullname: str, utm_source: str):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        await conn.execute("""
+            INSERT OR IGNORE INTO users (user_id, fullname, phone, utm_source, last_direction)
+            VALUES (?, ?, NULL, ?, NULL)
+        """, (user_id, fullname, utm_source))
+        await conn.commit()
 
-def db_update_user_direction(user_id: int, direction: str):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET last_direction = ? WHERE user_id = ?", (direction, user_id))
-    conn.commit()
-    conn.close()
+async def db_update_user_profile(user_id: int, fullname: str = None, phone: str = None, direction: str = None):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        if fullname:
+            await conn.execute("UPDATE users SET fullname = ? WHERE user_id = ?", (fullname, user_id))
+        if phone:
+            await conn.execute("UPDATE users SET phone = ? WHERE user_id = ?", (phone, user_id))
+        if direction:
+            await conn.execute("UPDATE users SET last_direction = ? WHERE user_id = ?", (direction, user_id))
+        await conn.commit()
 
-def db_get_user(user_id: int):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT fullname, utm_source, last_direction FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return {"fullname": row[0], "utm_source": row[1], "last_direction": row[2]}
+async def db_get_user(user_id: int):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        async with conn.execute("SELECT fullname, phone, utm_source, last_direction FROM users WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return {"fullname": row[0], "phone": row[1], "utm_source": row[2], "last_direction": row[3]}
     return None
 
-def db_get_all_users():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, fullname, utm_source, last_direction FROM users")
-    rows = cursor.fetchall()
-    conn.close()
-    return {r[0]: {"fullname": r[1], "utm_source": r[2], "last_direction": r[3]} for r in rows}
+async def db_get_all_users():
+    async with aiosqlite.connect(DB_FILE) as conn:
+        async with conn.execute("SELECT user_id, fullname, phone, utm_source, last_direction FROM users") as cursor:
+            rows = await cursor.fetchall()
+            return {r[0]: {"fullname": r[1], "phone": r[2], "utm_source": r[3], "last_direction": r[4]} for r in rows}
 
-def db_add_application(user_id: int, fullname: str, phone: str, direction: str, utm_source: str, comment: str, file_id: str):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR REPLACE INTO applications (user_id, fullname, phone, direction, utm_source, comment, file_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (user_id, fullname, phone, direction, utm_source, comment, file_id))
-    conn.commit()
-    conn.close()
+async def db_add_application(user_id: int, fullname: str, phone: str, direction: str, utm_source: str, comment: str, file_id: str):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        await conn.execute("""
+            INSERT OR REPLACE INTO applications (user_id, fullname, phone, direction, utm_source, comment, file_id, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, '⏳ На модерации')
+        """, (user_id, fullname, phone, direction, utm_source, comment, file_id))
+        await conn.commit()
 
-def db_get_all_applications():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, fullname, phone, direction, utm_source, comment, file_id FROM applications")
-    rows = cursor.fetchall()
-    conn.close()
-    return {r[0]: {"fullname": r[1], "phone": r[2], "direction": r[3], "utm_source": r[4], "comment": r[5], "file_id": r[6]} for r in rows}
-
-def db_pop_application(user_id: int):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT fullname, phone, direction, utm_source, comment, file_id FROM applications WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    if row:
-        cursor.execute("DELETE FROM applications WHERE user_id = ?", (user_id,))
-        conn.commit()
-        conn.close()
-        return {"fullname": row[0], "phone": row[1], "direction": row[2], "utm_source": row[3], "comment": row[4], "file_id": row[5]}
-    conn.close()
+async def db_get_user_application(user_id: int):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        async with conn.execute("SELECT fullname, phone, direction, utm_source, comment, file_id, status FROM applications WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return {"fullname": row[0], "phone": row[1], "direction": row[2], "utm_source": row[3], "comment": row[4], "file_id": row[5], "status": row[6]}
     return None
 
-def db_get_reviews_stats():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT total_stars, count FROM reviews_stats WHERE id = 1")
-    row = cursor.fetchone()
-    conn.close()
-    return {"total_stars": row[0], "count": row[1]}
+async def db_update_application_status(user_id: int, status: str):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        await conn.execute("UPDATE applications SET status = ? WHERE user_id = ?", (status, user_id))
+        await conn.commit()
 
-def db_update_reviews_stats(stars: int):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE reviews_stats SET total_stars = total_stars + ?, count = count + 1 WHERE id = 1", (stars,))
-    conn.commit()
-    conn.close()
+async def db_get_all_applications():
+    async with aiosqlite.connect(DB_FILE) as conn:
+        async with conn.execute("SELECT user_id, fullname, phone, direction, utm_source, comment, file_id, status FROM applications") as cursor:
+            rows = await cursor.fetchall()
+            return {r[0]: {"fullname": r[1], "phone": r[2], "direction": r[3], "utm_source": r[4], "comment": r[5], "file_id": r[6], "status": r[7]} for r in rows}
+
+async def db_get_reviews_stats():
+    async with aiosqlite.connect(DB_FILE) as conn:
+        async with conn.execute("SELECT total_stars, count FROM reviews_stats WHERE id = 1") as cursor:
+            row = await cursor.fetchone()
+            return {"total_stars": row[0], "count": row[1]}
+
+async def db_update_reviews_stats(stars: int):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        await conn.execute("UPDATE reviews_stats SET total_stars = total_stars + ?, count = count + 1 WHERE id = 1", (stars,))
+        await conn.commit()
 
 # ═══════════════════════════════════════════════════
 #    АВТО-ПЕРЕХВАТ (MIDDLEWARE) И ОЧИСТКА ЧАТА
@@ -224,7 +212,7 @@ def db_update_reviews_stats(stars: int):
 class AutoMessageTrackerMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: TelegramObject, data: dict):
         if isinstance(event, Message):
-            db_track_msg(event.chat.id, event.message_id)
+            await db_track_msg(event.chat.id, event.message_id)
         return await handler(event, data)
 
 class IsAdminFilter(Filter):
@@ -246,16 +234,16 @@ def get_progress_bar(step: int, total: int = 8) -> str:
     return f"\n<b>Этап:</b> {green_blocks}{white_blocks} {percent}%\n"
 
 async def track_msg(chat_id: int, msg_id: int):
-    db_track_msg(chat_id, msg_id)
+    await db_track_msg(chat_id, msg_id)
 
 async def clear_chat_history(chat_id: int):
-    messages_to_delete = db_get_chat_history(chat_id)
+    messages_to_delete = await db_get_chat_history(chat_id)
     for msg_id in messages_to_delete:
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except Exception:
             pass  
-    db_clear_chat_history(chat_id)
+    await db_clear_chat_history(chat_id)
 
 # ═══════════════════════════════════════════════════
 #                  ИНТЕРФЕЙСНЫЕ КНОПКИ
@@ -297,17 +285,15 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
     await state.clear()
 
     utm_source = command.args if command.args else "Прямой переход"
-    db_register_user(message.from_user.id, message.from_user.full_name, utm_source)
+    await db_register_user(message.from_user.id, message.from_user.full_name, utm_source)
 
     welcome_text = (
         "<b>🩺 МЕДИЦИНСКИЙ ЦЕНТР «ПРАЙМ»</b>\n"
         "<blockquote>Добро пожаловать в единую цифровую систему управления Вашим здоровьем. All-in-one платформа для связи с клиникой.</blockquote>\n"
         "Все доступные функции структурированы в нижнем меню взаимодействия.\n\n"
-        "⚠️ <i><b>Примечание:</b> Данный бот является исключительно демонстрационным проектом. Медицинский центр «ПРАЙМ» вымышлен, "
-        "а система создана для демонстрации технических возможностей автоматизации, обработки FSM-анкет и интеграции с БД.</i>"
+        "⚠️ <i><b>Примечание:</b> Данный бот является исключительно демонстрационным проектом. Медицинский центр «ПРАЙМ» вымышлен.</i>"
     )
     
-    # Инлайн-кнопка для быстрого открытия Mini App прямо под приветствием
     start_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚀 Запустить Mini App", web_app=WebAppInfo(url=MINI_APP_URL))]
     ])
@@ -315,9 +301,133 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
     res = await message.answer(welcome_text, reply_markup=start_kb, parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
     
-    # Отправляем клавиатуру главного меню отдельным сообщением, чтобы зафиксировать кнопки снизу
     menu_res = await message.answer("Главное меню:", reply_markup=get_full_main_menu())
     await track_msg(message.chat.id, menu_res.message_id)
+
+# ═══════════════════════════════════════════════════
+#  ОБНОВЛЕННЫЙ ЛИЧНЫЙ КАБИНЕТ + ИНТЕГРАЦИЯ MINI APP
+# ═══════════════════════════════════════════════════
+
+@router.message(F.text == "👤 Личный кабинет")
+async def user_cabinet(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    user_data = await db_get_user(user_id) or {}
+    app_data = await db_get_user_application(user_id)
+
+    fullname = user_data.get("fullname") or message.from_user.full_name
+    phone = user_data.get("phone") or "Не указан (заполняется при записи)"
+    utm = user_data.get("utm_source") or "Прямой переход"
+    last_dir = user_data.get("last_direction") or "Нет активных направлений"
+
+    # Формирование статуса заявки из БД
+    if app_data:
+        app_status_text = (
+            f"\n\n<b>📋 ТЕКУЩАЯ ЗАЯВКА НА ПРИЕМ:</b>\n"
+            f"• Направление: {app_data['direction']}\n"
+            f"• Телефон: <code>{app_data['phone']}</code>\n"
+            f"• Статус заявки: <b>{app_data['status']}</b>\n"
+            f"• Комментарий: <i>{app_data['comment']}</i>"
+        )
+    else:
+        app_status_text = "\n\n<b>📋 ТЕКУЩАЯ ЗАЯВКА:</b>\n<i>Активных записей на прием не найдено.</i>"
+
+    cabinet_text = (
+        "<b>👤 ЭЛЕКТРОННАЯ КАРТА ПАЦИЕНТА</b>\n\n"
+        f"• <b>ФИО:</b> {fullname}\n"
+        f"• <b>Контактный телефон:</b> <code>{phone}</code>\n"
+        f"• <b>ID Пациента:</b> <code>{user_id}</code>\n"
+        f"• <b>Источник регистрации:</b> <code>{utm}</code>\n"
+        f"• <b>Предпочтительное отделение:</b> {last_dir}"
+        f"{app_status_text}\n\n"
+        "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        "💡 <i>Вы можете полностью управлять Вашим профилем, расписанием и медицинскими картами через наш интеракативный <b>Mini App</b>.</i>"
+    )
+
+    cabinet_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Открыть Кабинет в Mini App", web_app=WebAppInfo(url=MINI_APP_URL))],
+        [InlineKeyboardButton(text="🔄 Обновить статус", callback_data="refresh_cabinet")]
+    ])
+
+    res = await message.answer(cabinet_text, reply_markup=cabinet_kb, parse_mode=ParseMode.HTML)
+    await track_msg(message.chat.id, res.message_id)
+
+@router.callback_query(F.data == "refresh_cabinet")
+async def refresh_cabinet_handler(callback: CallbackQuery):
+    await callback.answer("Данные обновлены ✅")
+    user_id = callback.from_user.id
+    user_data = await db_get_user(user_id) or {}
+    app_data = await db_get_user_application(user_id)
+
+    fullname = user_data.get("fullname") or callback.from_user.full_name
+    phone = user_data.get("phone") or "Не указан"
+    utm = user_data.get("utm_source") or "Прямой переход"
+    last_dir = user_data.get("last_direction") or "Нет активных направлений"
+
+    if app_data:
+        app_status_text = (
+            f"\n\n<b>📋 ТЕКУЩАЯ ЗАЯВКА НА ПРИЕМ:</b>\n"
+            f"• Направление: {app_data['direction']}\n"
+            f"• Телефон: <code>{app_data['phone']}</code>\n"
+            f"• Статус заявки: <b>{app_data['status']}</b>\n"
+            f"• Комментарий: <i>{app_data['comment']}</i>"
+        )
+    else:
+        app_status_text = "\n\n<b>📋 ТЕКУЩАЯ ЗАЯВКА:</b>\n<i>Активных записей на прием не найдено.</i>"
+
+    cabinet_text = (
+        "<b>👤 ЭЛЕКТРОННАЯ КАРТА ПАЦИЕНТА</b>\n\n"
+        f"• <b>ФИО:</b> {fullname}\n"
+        f"• <b>Контактный телефон:</b> <code>{phone}</code>\n"
+        f"• <b>ID Пациента:</b> <code>{user_id}</code>\n"
+        f"• <b>Источник регистрации:</b> <code>{utm}</code>\n"
+        f"• <b>Предпочтительное отделение:</b> {last_dir}"
+        f"{app_status_text}\n\n"
+        "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        "💡 <i>Вы можете полностью управлять Вашим профилем, расписанием и медицинскими картами через наш интеракативный <b>Mini App</b>.</i>"
+    )
+
+    cabinet_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Открыть Кабинет в Mini App", web_app=WebAppInfo(url=MINI_APP_URL))],
+        [InlineKeyboardButton(text="🔄 Обновить статус", callback_data="refresh_cabinet")]
+    ])
+
+    try:
+        await callback.message.edit_text(cabinet_text, reply_markup=cabinet_kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+# ═══════════════════════════════════════════════════
+#   ПЕРЕХВАТ ДАННЫХ, ОТПРАВЛЕННЫХ ИЗ MINI APP
+# ═══════════════════════════════════════════════════
+
+@router.message(F.web_app_data)
+async def handle_web_app_data(message: Message):
+    """Ловит отправленные через Telegram.WebApp.sendData() из фронтенда данные"""
+    try:
+        raw_json = message.web_app_data.data
+        data = json.loads(raw_json)
+        
+        user_id = message.from_user.id
+        action = data.get("action", "unknown")
+
+        if action == "update_profile":
+            fullname = data.get("fullname")
+            phone = data.get("phone")
+            await db_update_user_profile(user_id, fullname=fullname, phone=phone)
+            await message.answer("✅ <b>Данные вашего профиля успешно синхронизированы из Mini App!</b>", parse_mode=ParseMode.HTML)
+            
+        elif action == "quick_booking":
+            direction = data.get("direction", "Общая диагностика")
+            phone = data.get("phone", "Не указан")
+            await db_add_application(user_id, message.from_user.full_name, phone, direction, "Mini App Direct", "Заявка создана через Mini App", None)
+            await message.answer("🚀 <b>Ваша заявка из Mini App принята и направлена на модерацию!</b>", parse_mode=ParseMode.HTML)
+            
+        else:
+            await message.answer(f"📥 <b>Получены данные из веб-приложения:</b>\n<code>{html.escape(raw_json)}</code>", parse_mode=ParseMode.HTML)
+
+    except Exception as e:
+        logging.error(f"Ошибка при обработке WebApp Data: {e}")
+        await message.answer("⚠️ Произошла ошибка при обработке данных из Mini App.")
 
 # ═══════════════════════════════════════════════════
 #         ДИНАМИЧЕСКАЯ СИСТЕМА ОТЗЫВОВ
@@ -325,7 +435,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
 
 @router.message(F.text == "⭐ Отзывы клиники")
 async def review_handler(message: Message, state: FSMContext):
-    stats = db_get_reviews_stats()
+    stats = await db_get_reviews_stats()
     avg_rating = stats["total_stars"] / stats["count"]
     
     stars_markup = InlineKeyboardMarkup(inline_keyboard=[
@@ -361,7 +471,7 @@ async def callback_view_reviews(callback: CallbackQuery):
 
 @router.callback_query(F.data == "back_to_reviews_main")
 async def callback_back_to_reviews_main(callback: CallbackQuery):
-    stats = db_get_reviews_stats()
+    stats = await db_get_reviews_stats()
     avg_rating = stats["total_stars"] / stats["count"]
     
     stars_markup = InlineKeyboardMarkup(inline_keyboard=[
@@ -382,8 +492,8 @@ async def process_smart_review(callback: CallbackQuery):
     rating = int(callback.data.split("_")[1])
     await callback.answer()
     
-    db_update_reviews_stats(rating)
-    stats = db_get_reviews_stats()
+    await db_update_reviews_stats(rating)
+    stats = await db_get_reviews_stats()
     new_avg = stats["total_stars"] / stats["count"]
     
     if rating >= 4:
@@ -437,7 +547,7 @@ async def cancel_booking_handler(callback: CallbackQuery, state: FSMContext):
 async def process_direction(callback: CallbackQuery, state: FSMContext):
     direction = callback.data
     await state.update_data(direction=direction)
-    db_update_user_direction(callback.from_user.id, direction)
+    await db_update_user_profile(callback.from_user.id, direction=direction)
         
     await state.set_state(BookingStates.choosing_doctor)
     progress = get_progress_bar(2)
@@ -568,7 +678,7 @@ async def final_submit_booking_handler(callback: CallbackQuery, state: FSMContex
     await callback.message.delete()
     doctor = DB_DOCTORS.get(data['doctor_id'])
     
-    profile = db_get_user(callback.from_user.id) or {}
+    profile = await db_get_user(callback.from_user.id) or {}
     utm = profile.get("utm_source", "Прямой переход")
     direction_label = "Кардиология" if data['direction'] == "dir_cardio" else "Терапия"
 
@@ -587,7 +697,8 @@ async def final_submit_booking_handler(callback: CallbackQuery, state: FSMContex
     res = await callback.message.answer(success_text, parse_mode=ParseMode.HTML, reply_markup=get_full_main_menu())
     await track_msg(callback.message.chat.id, res.message_id)
 
-    db_add_application(
+    # Сохраняем заявку и обновляем данные профиля
+    await db_add_application(
         user_id=callback.from_user.id,
         fullname=data['fullname'],
         phone=data['phone'],
@@ -596,6 +707,7 @@ async def final_submit_booking_handler(callback: CallbackQuery, state: FSMContex
         comment=data['comment'],
         file_id=data.get('file_id')
     )
+    await db_update_user_profile(callback.from_user.id, fullname=data['fullname'], phone=data['phone'])
 
     targets = list(ACTIVE_ADMINS)
     if ADMIN_CHAT_ID != 0:
@@ -608,7 +720,7 @@ async def final_submit_booking_handler(callback: CallbackQuery, state: FSMContex
             ])
             await bot.send_message(
                 chat_id=chat_id,
-                text=f"🚨 <b>Поступила новая анкету!</b>\n• Пациент: {data['fullname']}\n• Направление: {direction_label}\n• Трафик: {utm}",
+                text=f"🚨 <b>Поступила новая анкета!</b>\n• Пациент: {data['fullname']}\n• Телефон: {data['phone']}\n• Направление: {direction_label}\n• Трафик: {utm}",
                 reply_markup=admin_markup,
                 parse_mode=ParseMode.HTML
             )
@@ -648,7 +760,7 @@ async def cmd_admin_panel(message: Message, state: FSMContext):
 @router.callback_query(F.data == "adm_view_analytics", IsAdminFilter())
 async def adm_view_analytics(callback: CallbackQuery):
     await callback.answer()
-    users = db_get_all_users()
+    users = await db_get_all_users()
     sources = {}
     for user in users.values():
         utm = user.get("utm_source", "Прямой переход")
@@ -664,7 +776,7 @@ async def adm_view_analytics(callback: CallbackQuery):
 @router.callback_query(F.data == "adm_view_pending", IsAdminFilter())
 async def adm_view_pending_applications(callback: CallbackQuery):
     await callback.answer()
-    apps = db_get_all_applications()
+    apps = await db_get_all_applications()
     if not apps:
         await callback.message.answer("📥 <b>Лист ожидания пуст.</b> Заявок на модерацию нет.", parse_mode=ParseMode.HTML)
         return
@@ -681,6 +793,7 @@ async def adm_view_pending_applications(callback: CallbackQuery):
             f"• Телефон: <code>{app_data['phone']}</code>\n"
             f"• Направление: {app_data['direction']}\n"
             f"• Источник: <code>{app_data['utm_source']}</code>\n"
+            f"• Статус: {app_data['status']}\n"
             f"• Комментарий: {app_data['comment']}\n"
         )
         
@@ -688,6 +801,27 @@ async def adm_view_pending_applications(callback: CallbackQuery):
             await callback.message.answer_document(document=app_data["file_id"], caption=info, reply_markup=moderation_kb, parse_mode=ParseMode.HTML)
         else:
             await callback.message.answer(info, reply_markup=moderation_kb, parse_mode=ParseMode.HTML)
+
+@router.callback_query(F.data.startswith("adm_approve_"), IsAdminFilter())
+@router.callback_query(F.data.startswith("adm_reject_"), IsAdminFilter())
+async def process_moderation(callback: CallbackQuery):
+    action = "approve" if "approve" in callback.data else "reject"
+    user_id = int(callback.data.split("_")[2])
+    
+    if action == "approve":
+        await db_update_application_status(user_id, "Одобрено и выгружено в МИС ✅")
+        try:
+            await bot.send_message(user_id, "🎉 <b>Ваша анкета успешно верифицирована!</b> Данные внесены в медицинскую систему клиники. Врач готов к приему.", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+        await callback.message.edit_text(callback.message.text + "\n\n🟢 <b>Вердикт: Одобрено и отправлено в МИС клиники</b>")
+    else:
+        await db_update_application_status(user_id, "Отклонено модератором 🔴")
+        try:
+            await bot.send_message(user_id, "❌ Ваша медицинская заявка отклонена модератором после проверки данных.")
+        except Exception:
+            pass
+        await callback.message.edit_text(callback.message.text + "\n\n🔴 <b>Вердикт: Анкета отклонена администрацией</b>")
 
 @router.callback_query(F.data == "adm_start_broadcast", IsAdminFilter())
 async def adm_start_broadcast(callback: CallbackQuery, state: FSMContext):
@@ -716,7 +850,7 @@ async def adm_execute_broadcast(callback: CallbackQuery, state: FSMContext):
     text = state_data["broadcast_text"]
     await state.clear()
     
-    users = db_get_all_users()
+    users = await db_get_all_users()
     count = 0
     for uid, profile in users.items():
         if segment == "all" or profile.get("last_direction") == f"dir_{segment}":
@@ -728,35 +862,12 @@ async def adm_execute_broadcast(callback: CallbackQuery, state: FSMContext):
                 
     await callback.message.answer(f"📢 Рассылка завершена успешно. Сообщение доставлено {count} пациентам.")
 
-@router.callback_query(F.data.startswith("adm_approve_"), IsAdminFilter())
-@router.callback_query(F.data.startswith("adm_reject_"), IsAdminFilter())
-async def process_moderation(callback: CallbackQuery):
-    action = "approve" if "approve" in callback.data else "reject"
-    user_id = int(callback.data.split("_")[2])
-    
-    app_data = db_pop_application(user_id)
-        
-    if action == "approve":
-        try:
-            await bot.send_message(user_id, "🎉 <b>Ваша анкета успешно верифицирована!</b> Данные внесены в медицинскую систему клиники. Врач готов к приему.", parse_mode=ParseMode.HTML)
-        except Exception:
-            pass
-        await callback.message.edit_text(callback.message.text + "\n\n🟢 <b>Вердикт: Одобрено и отправлено в МИС клиники</b>")
-    else:
-        try:
-            await bot.send_message(user_id, "❌ Ваша медицинская заявка отклонена модератором после проверки данных.")
-        except Exception:
-            pass
-        await callback.message.edit_text(callback.message.text + "\n\n🔴 <b>Вердикт: Анкета отклонена администрацией</b>")
-
-
 # ═══════════════════════════════════════════════════
 #     НОВАЯ СИСТЕМА ДВУСТОРОННЕЙ ПОДДЕРЖКИ (ТИКЕТЫ)
 # ═══════════════════════════════════════════════════
 
 @router.callback_query(F.data.startswith("ans_user_"), IsAdminFilter())
 async def ask_admin_reply(callback: CallbackQuery, state: FSMContext):
-    """Срабатывает, когда админ нажимает кнопку 'Ответить пациенту'"""
     await callback.answer()
     target_user_id = int(callback.data.split("_")[2])
     
@@ -765,13 +876,12 @@ async def ask_admin_reply(callback: CallbackQuery, state: FSMContext):
     
     await callback.message.answer(
         f"📝 <b>Режим ответа. Введите сообщение для пациента (ID: {target_user_id}):</b>\n\n"
-        f"<i>Пациент получит ваше сообщение мгновенно. Для отмены введите /admin или нажмите кнопку меню.</i>", 
+        f"<i>Пациент получит ваше сообщение мгновенно. Для отмены введите /admin.</i>", 
         parse_mode=ParseMode.HTML
     )
 
 @router.message(AdminStates.typing_reply, F.text)
 async def send_admin_reply(message: Message, state: FSMContext):
-    """Пересылает введенный админом текст обратно пользователю"""
     if message.text.startswith("/"):
         await state.clear()
         return 
@@ -790,39 +900,21 @@ async def send_admin_reply(message: Message, state: FSMContext):
         )
         await message.answer("✅ Ответ успешно доставлен пациенту.")
     except Exception as e:
-        await message.answer(f"❌ <b>Ошибка доставки.</b> Возможно, пользователь заблокировал бота.\nПодробнее: {e}", parse_mode=ParseMode.HTML)
-
+        await message.answer(f"❌ <b>Ошибка доставки.</b> Подробнее: {e}", parse_mode=ParseMode.HTML)
 
 # ═══════════════════════════════════════════════════
 #          ШТАТНЫЕ ИНФОРМАЦИОННЫЕ ХЭНДЛЕРЫ
 # ═══════════════════════════════════════════════════
 
-@router.message(F.text == "👤 Личный кабинет")
-async def user_cabinet(message: Message, state: FSMContext):
-    profile = db_get_user(message.from_user.id) or {}
-    utm = profile.get("utm_source", "Не определен")
-    cabinet_text = (
-        "<b>👤 КАРТА ПАЦИЕНТА В СИСТЕМЕ</b>\n\n"
-        f"• Имя профиля: {message.from_user.first_name}\n"
-        f"• Маркетинговый источник: <code>{utm}</code>\n"
-        f"• Статус: Верифицированный клиент клиники\n"
-        "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        "<blockquote>Синхронизация истории посещений с базой МИС активна.</blockquote>"
-    )
-    res = await message.answer(cabinet_text, parse_mode=ParseMode.HTML)
-    await track_msg(message.chat.id, res.message_id)
-
 @router.message(F.text == "ℹ️ Служба поддержки (FAQ)")
 async def faq_handler(message: Message, state: FSMContext):
     instruction = (
         "<b>📋 Единая база вопросов и ответов</b>\n\n"
-        "Вы можете написать свой вопрос обычным текстом прямо в этот чат, и я постараюсь мгновенно найти ответ в базе знаний клиники ПРАЙМ!\n\n"
-        "<b>Часто запрашиваемые темы для ввода:</b>\n"
+        "Вы можете написать свой вопрос обычным текстом прямо в этот чат, и оператор ответит вам.\n\n"
+        "<b>Часто запрашиваемые темы:</b>\n"
         "• <i>«Где вы находитесь?»</i>\n"
         "• <i>«Как подготовиться к анализам?»</i>\n"
-        "• <i>«Нужен налоговый вычет»</i>\n"
-        "• <i>«Как оформить больничный лист?»</i>\n\n"
-        "✍️ <b>Просто напишите ваш кастомный вопрос сообщением ниже, и оператор ответит вам.</b>"
+        "• <i>«Нужен налоговый вычет»</i>"
     )
     res = await message.answer(instruction, parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
@@ -842,7 +934,6 @@ async def operator_handler(message: Message, state: FSMContext):
     res = await message.answer("📞 <b>Запрос отправлен оператору.</b> Напишите ваш вопрос следующим сообщением, и свободный сотрудник подключится к чату.", parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
     
-    # Оповещаем администраторов о вызове оператора
     targets = list(ACTIVE_ADMINS)
     if ADMIN_CHAT_ID != 0:
         targets.append(ADMIN_CHAT_ID)
@@ -871,31 +962,26 @@ async def donation_menu(message: Message, state: FSMContext):
     res = await message.answer("💝 Вы можете внести благотворительный взнос на развитие IT-инфраструктуры в Telegram Stars:", reply_markup=donation_kb)
     await track_msg(message.chat.id, res.message_id)
 
-
 # ═══════════════════════════════════════════════════
 #  ГЛОБАЛЬНЫЙ ПЕРЕХВАТЧИК СЛУЧАЙНОГО ТЕКСТА (ВОПРОСОВ)
 # ═══════════════════════════════════════════════════
 
 @router.message(F.text)
 async def handle_user_question(message: Message, state: FSMContext):
-    """Ловит любой текст, который не является кнопкой или командой, и шлет админам"""
     menu_buttons = [
         "🚀 Открыть Mini App", "🩺 Оставить заявку на прием", "👤 Личный кабинет", "⭐ Отзывы клиники",
         "ℹ️ Служба поддержки (FAQ)", "📞 Связаться с оператором", "💰 Цены",
         "📍 Адреса", "💝 Пожертвовать клинике"
     ]
-    # Если это кнопка меню или команда — пропускаем хэндлер
     if message.text in menu_buttons or message.text.startswith("/"):
         return 
 
     user_id = message.from_user.id
     question = html.escape(message.text.strip())
 
-    # Подтверждаем пользователю получение
     res = await message.answer("✨ <b>Ваш вопрос отправлен дежурному оператору клиники!</b>\nОтвет придет в этот чат в ближайшее время.", parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
 
-    # Отправляем тикет в админ-чаты
     targets = list(ACTIVE_ADMINS)
     if ADMIN_CHAT_ID != 0:
         targets.append(ADMIN_CHAT_ID)
@@ -923,23 +1009,24 @@ async def render_health_check(request):
     return web.Response(text="ONLINE")
 
 async def main():
-    init_db()
+    await init_db()
     dp.message.outer_middleware(AutoMessageTrackerMiddleware())
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
     
     app = web.Application()
     app.router.add_get("/", render_health_check)
+    app.router.add_get("/health", render_health_check)
     runner = web.AppRunner(app)
     await runner.setup()
     
     port = int(os.getenv("PORT", 8080))
     try:
         await web.TCPSite(runner, "0.0.0.0", port).start()
-    except Exception:
-        pass
+    except Exception as e:
+        logging.warning(f"Не удалось запустить веб-сервер на порту {port}: {e}")
 
-    print("🚀 Бот запущен с интерактивной техподдержкой!")
+    print("🚀 Бот запущен с асинхронной БД и обновленным Личным Кабинетом!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
