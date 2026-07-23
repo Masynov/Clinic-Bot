@@ -55,6 +55,10 @@ DB_DOCTORS = {
     }
 }
 
+# ═══════════════════════════════════════════════════
+#                СОСТОЯНИЯ (FSM)
+# ═══════════════════════════════════════════════════
+
 class BookingStates(StatesGroup):
     choosing_direction = State()
     choosing_doctor = State()
@@ -71,6 +75,16 @@ class AdminStates(StatesGroup):
     choosing_broadcast_segment = State()
     typing_reply = State()
 
+class PatientMedCardStates(StatesGroup):
+    entering_blood_type = State()
+    entering_allergies = State()
+    entering_chronic = State()
+
+class DoctorMedCardStates(StatesGroup):
+    entering_user_id = State()
+    entering_diagnosis = State()
+    entering_prescriptions = State()
+
 # ═══════════════════════════════════════════════════
 #        АСИНХРОННАЯ РАБОТА С СУБД (AIOSQLITE)
 # ═══════════════════════════════════════════════════
@@ -83,9 +97,16 @@ async def init_db():
                 fullname TEXT,
                 phone TEXT,
                 utm_source TEXT,
-                last_direction TEXT
+                last_direction TEXT,
+                points INTEGER DEFAULT 0
             )
         """)
+        # Миграция поля points, если таблица была создана ранее
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN points INTEGER DEFAULT 0")
+        except Exception:
+            pass
+
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS chat_history (
                 chat_id INTEGER,
@@ -110,6 +131,18 @@ async def init_db():
                 id INTEGER PRIMARY KEY,
                 total_stars INTEGER,
                 count INTEGER
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS medical_cards (
+                user_id INTEGER PRIMARY KEY,
+                blood_type TEXT DEFAULT 'Не указана',
+                allergies TEXT DEFAULT 'Не указано',
+                chronic_diseases TEXT DEFAULT 'Не указано',
+                diagnosis TEXT DEFAULT 'Не поставлен',
+                prescriptions TEXT DEFAULT 'Нет назначений',
+                updated_by TEXT DEFAULT 'Система',
+                updated_at TEXT DEFAULT (datetime('now', 'localtime'))
             )
         """)
         
@@ -139,8 +172,8 @@ async def db_clear_chat_history(chat_id: int):
 async def db_register_user(user_id: int, fullname: str, utm_source: str):
     async with aiosqlite.connect(DB_FILE) as conn:
         await conn.execute("""
-            INSERT OR IGNORE INTO users (user_id, fullname, phone, utm_source, last_direction)
-            VALUES (?, ?, NULL, ?, NULL)
+            INSERT OR IGNORE INTO users (user_id, fullname, phone, utm_source, last_direction, points)
+            VALUES (?, ?, NULL, ?, NULL, 0)
         """, (user_id, fullname, utm_source))
         await conn.commit()
 
@@ -154,19 +187,77 @@ async def db_update_user_profile(user_id: int, fullname: str = None, phone: str 
             await conn.execute("UPDATE users SET last_direction = ? WHERE user_id = ?", (direction, user_id))
         await conn.commit()
 
+async def db_add_points(user_id: int, points: int):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        await conn.execute("UPDATE users SET points = MAX(0, points + ?) WHERE user_id = ?", (points, user_id))
+        await conn.commit()
+
 async def db_get_user(user_id: int):
     async with aiosqlite.connect(DB_FILE) as conn:
-        async with conn.execute("SELECT fullname, phone, utm_source, last_direction FROM users WHERE user_id = ?", (user_id,)) as cursor:
+        async with conn.execute("SELECT fullname, phone, utm_source, last_direction, points FROM users WHERE user_id = ?", (user_id,)) as cursor:
             row = await cursor.fetchone()
             if row:
-                return {"fullname": row[0], "phone": row[1], "utm_source": row[2], "last_direction": row[3]}
+                return {"fullname": row[0], "phone": row[1], "utm_source": row[2], "last_direction": row[3], "points": row[4]}
     return None
 
 async def db_get_all_users():
     async with aiosqlite.connect(DB_FILE) as conn:
-        async with conn.execute("SELECT user_id, fullname, phone, utm_source, last_direction FROM users") as cursor:
+        async with conn.execute("SELECT user_id, fullname, phone, utm_source, last_direction, points FROM users") as cursor:
             rows = await cursor.fetchall()
-            return {r[0]: {"fullname": r[1], "phone": r[2], "utm_source": r[3], "last_direction": r[4]} for r in rows}
+            return {r[0]: {"fullname": r[1], "phone": r[2], "utm_source": r[3], "last_direction": r[4], "points": r[5]} for r in rows}
+
+# --- МЕДИЦИНСКИЕ КАРТЫ (БД) ---
+
+async def db_get_medcard(user_id: int):
+    async with aiosqlite.connect(DB_FILE) as conn:
+        async with conn.execute("""
+            SELECT blood_type, allergies, chronic_diseases, diagnosis, prescriptions, updated_by, updated_at
+            FROM medical_cards WHERE user_id = ?
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return {
+                    "blood_type": row[0],
+                    "allergies": row[1],
+                    "chronic_diseases": row[2],
+                    "diagnosis": row[3],
+                    "prescriptions": row[4],
+                    "updated_by": row[5],
+                    "updated_at": row[6]
+                }
+    return None
+
+async def db_update_medcard(user_id: int, blood_type: str = None, allergies: str = None,
+                           chronic_diseases: str = None, diagnosis: str = None,
+                           prescriptions: str = None, updated_by: str = "patient"):
+    card = await db_get_medcard(user_id)
+    async with aiosqlite.connect(DB_FILE) as conn:
+        if not card:
+            await conn.execute("""
+                INSERT INTO medical_cards (user_id, blood_type, allergies, chronic_diseases, diagnosis, prescriptions, updated_by, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+            """, (
+                user_id,
+                blood_type or "Не указана",
+                allergies or "Не указано",
+                chronic_diseases or "Не указано",
+                diagnosis or "Не поставлен",
+                prescriptions or "Нет назначений",
+                updated_by
+            ))
+        else:
+            new_blood = blood_type if blood_type is not None else card["blood_type"]
+            new_allergies = allergies if allergies is not None else card["allergies"]
+            new_chronic = chronic_diseases if chronic_diseases is not None else card["chronic_diseases"]
+            new_diag = diagnosis if diagnosis is not None else card["diagnosis"]
+            new_presc = prescriptions if prescriptions is not None else card["prescriptions"]
+
+            await conn.execute("""
+                UPDATE medical_cards
+                SET blood_type = ?, allergies = ?, chronic_diseases = ?, diagnosis = ?, prescriptions = ?, updated_by = ?, updated_at = datetime('now', 'localtime')
+                WHERE user_id = ?
+            """, (new_blood, new_allergies, new_chronic, new_diag, new_presc, updated_by, user_id))
+        await conn.commit()
 
 async def db_add_application(user_id: int, fullname: str, phone: str, direction: str, utm_source: str, comment: str, file_id: str):
     async with aiosqlite.connect(DB_FILE) as conn:
@@ -255,10 +346,10 @@ def get_full_main_menu() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="🚀 Открыть Mini App", web_app=WebAppInfo(url=MINI_APP_URL))],
             [KeyboardButton(text="🩺 Оставить заявку на прием")],
-            [KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="⭐ Отзывы клиники")],
-            [KeyboardButton(text="ℹ️ Служба поддержки (FAQ)"), KeyboardButton(text="📞 Связаться с оператором")],
-            [KeyboardButton(text="💰 Цены"), KeyboardButton(text="📍 Адреса")],
-            [KeyboardButton(text="💝 Пожертвовать клинике")]
+            [KeyboardButton(text="👤 Личный кабинет"), KeyboardButton(text="🏥 Моя Медкарта")],
+            [KeyboardButton(text="⭐ Отзывы клиники"), KeyboardButton(text="ℹ️ Служба поддержки (FAQ)")],
+            [KeyboardButton(text="📞 Связаться с оператором"), KeyboardButton(text="💰 Цены")],
+            [KeyboardButton(text="📍 Адреса"), KeyboardButton(text="💝 Пожертвовать клинике")]
         ],
         resize_keyboard=True
     )
@@ -306,7 +397,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
     await track_msg(message.chat.id, menu_res.message_id)
 
 # ═══════════════════════════════════════════════════
-#  ОБНОВЛЕННЫЙ ЛИЧНЫЙ КАБИНЕТ + ИНТЕГРАЦИЯ MINI APP
+#  ОБНОВЛЕННЫЙ ЛИЧНЫЙ КАБИНЕТ С БАЛЛАМИ ЛОЯЛЬНОСТИ
 # ═══════════════════════════════════════════════════
 
 @router.message(F.text == "👤 Личный кабинет")
@@ -316,9 +407,10 @@ async def user_cabinet(message: Message, state: FSMContext):
     app_data = await db_get_user_application(user_id)
 
     fullname = user_data.get("fullname") or message.from_user.full_name
-    phone = user_data.get("phone") or "Не указан (заполняется при записи)"
+    phone = user_data.get("phone") or "Не указан"
     utm = user_data.get("utm_source") or "Прямой переход"
     last_dir = user_data.get("last_direction") or "Нет активных направлений"
+    points = user_data.get("points", 0)
 
     if app_data:
         app_status_text = (
@@ -332,20 +424,22 @@ async def user_cabinet(message: Message, state: FSMContext):
         app_status_text = "\n\n<b>📋 ТЕКУЩАЯ ЗАЯВКА:</b>\n<i>Активных записей на прием не найдено.</i>"
 
     cabinet_text = (
-        "<b>👤 ЭЛЕКТРОННАЯ КАРТА ПАЦИЕНТА</b>\n\n"
+        "<b>👤 ЛИЧНЫЙ КАБИНЕТ ПАЦИЕНТА</b>\n\n"
         f"• <b>ФИО:</b> {fullname}\n"
         f"• <b>Контактный телефон:</b> <code>{phone}</code>\n"
         f"• <b>ID Пациента:</b> <code>{user_id}</code>\n"
+        f"• <b>Бонусные баллы:</b> 💎 <b>{points}</b> баллов\n"
         f"• <b>Источник регистрации:</b> <code>{utm}</code>\n"
         f"• <b>Предпочтительное отделение:</b> {last_dir}"
         f"{app_status_text}\n\n"
         "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        "💡 <i>Вы можете полностью управлять Вашим профилем, расписанием и медицинскими картами через наш интеракативный <b>Mini App</b>.</i>"
+        "💡 <i>Баллами можно оплачивать услуги клиники. Зарабатывайте баллы, записываясь на прием и оставляя отзывы!</i>"
     )
 
     cabinet_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏥 Просмотреть Медкарту", callback_data="open_medcard")],
         [InlineKeyboardButton(text="🚀 Открыть Кабинет в Mini App", web_app=WebAppInfo(url=MINI_APP_URL))],
-        [InlineKeyboardButton(text="🔄 Обновить статус", callback_data="refresh_cabinet")]
+        [InlineKeyboardButton(text="🔄 Обновить данные", callback_data="refresh_cabinet")]
     ])
 
     res = await message.answer(cabinet_text, reply_markup=cabinet_kb, parse_mode=ParseMode.HTML)
@@ -362,6 +456,7 @@ async def refresh_cabinet_handler(callback: CallbackQuery):
     phone = user_data.get("phone") or "Не указан"
     utm = user_data.get("utm_source") or "Прямой переход"
     last_dir = user_data.get("last_direction") or "Нет активных направлений"
+    points = user_data.get("points", 0)
 
     if app_data:
         app_status_text = (
@@ -375,24 +470,180 @@ async def refresh_cabinet_handler(callback: CallbackQuery):
         app_status_text = "\n\n<b>📋 ТЕКУЩАЯ ЗАЯВКА:</b>\n<i>Активных записей на прием не найдено.</i>"
 
     cabinet_text = (
-        "<b>👤 ЭЛЕКТРОННАЯ КАРТА ПАЦИЕНТА</b>\n\n"
+        "<b>👤 ЛИЧНЫЙ КАБИНЕТ ПАЦИЕНТА</b>\n\n"
         f"• <b>ФИО:</b> {fullname}\n"
         f"• <b>Контактный телефон:</b> <code>{phone}</code>\n"
         f"• <b>ID Пациента:</b> <code>{user_id}</code>\n"
+        f"• <b>Бонусные баллы:</b> 💎 <b>{points}</b> баллов\n"
         f"• <b>Источник регистрации:</b> <code>{utm}</code>\n"
         f"• <b>Предпочтительное отделение:</b> {last_dir}"
         f"{app_status_text}\n\n"
         "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        "💡 <i>Вы можете полностью управлять Вашим профилем, расписанием и медицинскими картами через наш интеракативный <b>Mini App</b>.</i>"
+        "💡 <i>Управляйте вашим профилем через интерактивный <b>Mini App</b>!</i>"
     )
 
     cabinet_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏥 Просмотреть Медкарту", callback_data="open_medcard")],
         [InlineKeyboardButton(text="🚀 Открыть Кабинет в Mini App", web_app=WebAppInfo(url=MINI_APP_URL))],
-        [InlineKeyboardButton(text="🔄 Обновить статус", callback_data="refresh_cabinet")]
+        [InlineKeyboardButton(text="🔄 Обновить данные", callback_data="refresh_cabinet")]
     ])
 
     try:
         await callback.message.edit_text(cabinet_text, reply_markup=cabinet_kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+# ═══════════════════════════════════════════════════
+#         ЭЛЕКТРОННАЯ МЕДИЦИНСКАЯ КАРТА
+# ═══════════════════════════════════════════════════
+
+async def render_medcard_view(user_id: int):
+    card = await db_get_medcard(user_id)
+    if not card:
+        return (
+            "<b>🏥 ЭЛЕКТРОННАЯ МЕДИЦИНСКАЯ КАРТА</b>\n\n"
+            "<i>Карта еще не заполнена. Вы можете указать свои базовая данные о здоровье или дождаться занесения данных врачом.</i>",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✏️ Заполнить анкету здоровья (Пациент)", callback_data="fill_patient_medcard")]
+            ])
+        )
+    
+    text = (
+        "<b>🏥 ЭЛЕКТРОННАЯ МЕДИЦИНСКАЯ КАРТА</b>\n\n"
+        "<b>👤 Личные медицинские данные (Заполняет пациент):</b>\n"
+        f"• Группа крови и резус-фактор: <b>{card['blood_type']}</b>\n"
+        f"• Аллергические реакции: <b>{card['allergies']}</b>\n"
+        f"• Хронические заболевания: <b>{card['chronic_diseases']}</b>\n\n"
+        "<b>🩺 Врачебные заключения (Заполняет лечащий врач):</b>\n"
+        f"• Текущий диагноз: <b>{card['diagnosis']}</b>\n"
+        f"• Назначенное лечение/лекарства: <b>{card['prescriptions']}</b>\n\n"
+        f"🕒 <i>Последнее обновление: {card['updated_at']} (Автор: {card['updated_by']})</i>"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Редактировать мои данные", callback_data="fill_patient_medcard")],
+        [InlineKeyboardButton(text="🚀 Открыть карту в Mini App", web_app=WebAppInfo(url=MINI_APP_URL))]
+    ])
+    return text, kb
+
+@router.message(F.text == "🏥 Моя Медкарта")
+@router.callback_query(F.data == "open_medcard")
+async def show_medcard_handler(event: Message | CallbackQuery):
+    user_id = event.from_user.id
+    text, kb = await render_medcard_view(user_id)
+    
+    if isinstance(event, CallbackQuery):
+        await event.answer()
+        res = await event.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    else:
+        res = await event.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    await track_msg(event.from_user.id, res.message_id)
+
+# --- ФОРМА ЗАПОЛНЕНИЯ МЕДКАРТЫ ПАЦИЕНТОМ (FSM) ---
+
+@router.callback_query(F.data == "fill_patient_medcard")
+async def start_patient_medcard(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(PatientMedCardStates.entering_blood_type)
+    res = await callback.message.answer("🩸 Укажите Вашу <b>группу крови и резус-фактор</b> (например, <i>'A(II) Rh+'</i>):", parse_mode=ParseMode.HTML)
+    await track_msg(callback.message.chat.id, res.message_id)
+
+@router.message(PatientMedCardStates.entering_blood_type, F.text)
+async def process_patient_blood(message: Message, state: FSMContext):
+    await state.update_data(blood_type=html.escape(message.text.strip()))
+    await state.set_state(PatientMedCardStates.entering_allergies)
+    res = await message.answer("⚠️ Укажите имеющиеся <b>аллергические реакции</b> (или напишите <i>'Нет'</i>):", parse_mode=ParseMode.HTML)
+    await track_msg(message.chat.id, res.message_id)
+
+@router.message(PatientMedCardStates.entering_allergies, F.text)
+async def process_patient_allergies(message: Message, state: FSMContext):
+    await state.update_data(allergies=html.escape(message.text.strip()))
+    await state.set_state(PatientMedCardStates.entering_chronic)
+    res = await message.answer("🏥 Перечислите ваши <b>хронические заболевания</b> (или напишите <i>'Нет'</i>):", parse_mode=ParseMode.HTML)
+    await track_msg(message.chat.id, res.message_id)
+
+@router.message(PatientMedCardStates.entering_chronic, F.text)
+async def process_patient_chronic(message: Message, state: FSMContext):
+    data = await state.get_data()
+    chronic = html.escape(message.text.strip())
+    await state.clear()
+
+    await db_update_medcard(
+        user_id=message.from_user.id,
+        blood_type=data["blood_type"],
+        allergies=data["allergies"],
+        chronic_diseases=chronic,
+        updated_by="Пациент"
+    )
+
+    res = await message.answer("✅ <b>Ваши медицинские данные успешно сохранены в медкарте!</b>", parse_mode=ParseMode.HTML)
+    await track_msg(message.chat.id, res.message_id)
+
+    text, kb = await render_medcard_view(message.from_user.id)
+    await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+# --- ФОРМА ЗАПОЛНЕНИЯ МЕДКАРТЫ ВРАЧОМ / АДМИНОМ ---
+
+@router.message(Command("medcard"), IsAdminFilter())
+async def cmd_doctor_edit_medcard(message: Message, command: CommandObject, state: FSMContext):
+    if command.args:
+        try:
+            target_id = int(command.args.strip())
+            await state.update_data(target_user_id=target_id)
+            await state.set_state(DoctorMedCardStates.entering_diagnosis)
+            res = await message.answer(f"🩺 <b>Заполнение медкарты для пациента ID {target_id}:</b>\n\nВведите медицинский <b>диагноз</b>:", parse_mode=ParseMode.HTML)
+            await track_msg(message.chat.id, res.message_id)
+            return
+        except ValueError:
+            pass
+
+    await state.set_state(DoctorMedCardStates.entering_user_id)
+    res = await message.answer("Введите <b>ID Пациента</b>, которому необходимо внести диагноз и назначения:", parse_mode=ParseMode.HTML)
+    await track_msg(message.chat.id, res.message_id)
+
+@router.message(DoctorMedCardStates.entering_user_id, F.text)
+async def process_doctor_user_id(message: Message, state: FSMContext):
+    try:
+        target_id = int(message.text.strip())
+        await state.update_data(target_user_id=target_id)
+        await state.set_state(DoctorMedCardStates.entering_diagnosis)
+        res = await message.answer(f"🩺 Введите медицинский <b>диагноз</b> для пациента {target_id}:", parse_mode=ParseMode.HTML)
+        await track_msg(message.chat.id, res.message_id)
+    except ValueError:
+        await message.answer("❌ Ошибка: ID пользователя должен состоять из цифр. Попробуйте еще раз.")
+
+@router.message(DoctorMedCardStates.entering_diagnosis, F.text)
+async def process_doctor_diagnosis(message: Message, state: FSMContext):
+    await state.update_data(diagnosis=html.escape(message.text.strip()))
+    await state.set_state(DoctorMedCardStates.entering_prescriptions)
+    res = await message.answer("💊 Введите <b>лечебные назначения, рецепты и рекомендации</b>:", parse_mode=ParseMode.HTML)
+    await track_msg(message.chat.id, res.message_id)
+
+@router.message(DoctorMedCardStates.entering_prescriptions, F.text)
+async def process_doctor_prescriptions(message: Message, state: FSMContext):
+    data = await state.get_data()
+    target_id = data["target_user_id"]
+    diagnosis = data["diagnosis"]
+    prescriptions = html.escape(message.text.strip())
+    await state.clear()
+
+    await db_update_medcard(
+        user_id=target_id,
+        diagnosis=diagnosis,
+        prescriptions=prescriptions,
+        updated_by="Лечащий врач (Администрация)"
+    )
+
+    res = await message.answer(f"✅ <b>Медкарта пациента ID {target_id} успешно обновлена!</b>", parse_mode=ParseMode.HTML)
+    await track_msg(message.chat.id, res.message_id)
+
+    # Уведомляем пациента
+    try:
+        await bot.send_message(
+            chat_id=target_id,
+            text="🩺 <b>Врач внес изменения в Вашу электронную медицинскую карту!</b>\nОткройте раздел «🏥 Моя Медкарта» для просмотра назначений.",
+            parse_mode=ParseMode.HTML
+        )
     except Exception:
         pass
 
@@ -415,11 +666,25 @@ async def handle_web_app_data(message: Message):
             await db_update_user_profile(user_id, fullname=fullname, phone=phone)
             await message.answer("✅ <b>Данные вашего профиля успешно синхронизированы из Mini App!</b>", parse_mode=ParseMode.HTML)
             
+        elif action == "update_medcard":
+            await db_update_medcard(
+                user_id=user_id,
+                blood_type=data.get("blood_type"),
+                allergies=data.get("allergies"),
+                chronic_diseases=data.get("chronic_diseases"),
+                updated_by="Mini App (Пациент)"
+            )
+            await message.answer("🏥 <b>Электронная медкарта успешно обновлена из Mini App!</b>", parse_mode=ParseMode.HTML)
+
         elif action == "quick_booking":
             direction = data.get("direction", "Общая диагностика")
             phone = data.get("phone", "Не указан")
             await db_add_application(user_id, message.from_user.full_name, phone, direction, "Mini App Direct", "Заявка создана через Mini App", None)
-            await message.answer("🚀 <b>Ваша заявка из Mini App принята и направлена на модерацию!</b>", parse_mode=ParseMode.HTML)
+            
+            # Начисляем 100 баллов за заявку из Mini App
+            await db_add_points(user_id, 100)
+            
+            await message.answer("🚀 <b>Ваша заявка из Mini App принята!</b> Вам начислено <b>+100 баллов</b> лояльности 💎", parse_mode=ParseMode.HTML)
             
         else:
             await message.answer(f"📥 <b>Получены данные из веб-приложения:</b>\n<code>{html.escape(raw_json)}</code>", parse_mode=ParseMode.HTML)
@@ -446,7 +711,7 @@ async def review_handler(message: Message, state: FSMContext):
     res = await message.answer(
         f"<b>📊 Динамический рейтинг клиники: {avg_rating:.2f} / 5.00 ⭐</b>\n"
         f"<i>(Всего получено оценок от пациентов: {stats['count']})</i>\n\n"
-        f"Пожалуйста, оцените качество обслуживания в нашей сети или прочитайте отзывы других людей:", 
+        f"Пожалуйста, оцените качество обслуживания в нашей сети. За отзыв начисляется <b>+50 баллов</b> лояльности!", 
         reply_markup=stars_markup, 
         parse_mode=ParseMode.HTML
     )
@@ -492,12 +757,16 @@ async def process_smart_review(callback: CallbackQuery):
     await callback.answer()
     
     await db_update_reviews_stats(rating)
+    # Начисляем 50 баллов за отзыв
+    await db_add_points(callback.from_user.id, 50)
+
     stats = await db_get_reviews_stats()
     new_avg = stats["total_stars"] / stats["count"]
     
     if rating >= 4:
         good_text = (
             f"✅ <b>Большое спасибо за Вашу оценку ({rating}/5)!</b>\n\n"
+            f"Вам начислено <b>+50 бонусных баллов</b> 💎!\n"
             f"Благодаря Вам наш текущий рейтинг поднялся до <b>{new_avg:.2f} ⭐</b>.\n"
             "Мы будем искренне признательны, если Вы продублируете свой отзыв на независимых площадках:\n"
             "🌐 <a href='https://yandex.ru/maps'>Яндекс.Карты</a>\n"
@@ -507,8 +776,9 @@ async def process_smart_review(callback: CallbackQuery):
     else:
         bad_text = (
             f"⚠️ <b>Принято. Нам очень жаль, что Вы столкнулись с неудобствами ({rating}/5).</b>\n\n"
+            "Вам начислено <b>+50 бонусных баллов</b> 💎 в знак нашего извинения.\n"
             "Ваш отзыв переведен в статус <b>«Претензия»</b> и направлен напрямую директору клиники. "
-            "Служба контроля качества свяжется с Вами для урегулирования ситуации в течение 30 минут."
+            "Служба контроля качества свяжется с Вами в течение 30 минут."
         )
         await callback.message.edit_text(bad_text, parse_mode=ParseMode.HTML)
         
@@ -660,7 +930,8 @@ async def render_booking_summary(message: Message, state: FSMContext):
         f"• Период: {data['date']}\n"
         f"• Анамнез/Симптомы: {data['comment']}\n"
         f"• Наличие КТ-снимка: {'Загружен ✅' if data.get('file_id') else 'Пропущено ➖'}\n\n"
-        "<blockquote>Направляя анкету, Вы соглашаетесь на обработку персональных данных. Подача заявки бесплатна.</blockquote>"
+        "🎁 <i>За успешное оформление заявки Вы получите <b>+100 баллов</b> лояльности!</i>\n"
+        "<blockquote>Направляя анкету, Вы соглашаетесь на обработку персональных данных.</blockquote>"
     )
     
     confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -681,9 +952,13 @@ async def final_submit_booking_handler(callback: CallbackQuery, state: FSMContex
     utm = profile.get("utm_source", "Прямой переход")
     direction_label = "Кардиология" if data['direction'] == "dir_cardio" else "Терапия"
 
+    # Начисляем 100 баллов за успешную запись
+    await db_add_points(callback.from_user.id, 100)
+
     success_text = (
         "<b>👑 ЗАЯВКА УСПЕШНО ЗАРЕГИСТРИРОВАНА</b>\n\n"
-        "<b>Текущий статус:</b> НА МОДЕРАЦИИ В ЛИСТЕ ОЖИДАНИЯ ⏳\n\n"
+        "<b>Текущий статус:</b> НА МОДЕРАЦИИ В ЛИСТЕ ОЖИДАНИЯ ⏳\n"
+        "💎 <b>Бонус: Вам начислено +100 баллов лояльности!</b>\n\n"
         f"<b>👨‍⚕️ Назначенный специалист:</b>\n"
         f"• ФИО: {doctor['name']}\n"
         f"• Квалификация: {doctor['spec']} (Стаж {doctor['exp']})\n"
@@ -740,31 +1015,69 @@ async def cmd_auth_handler(message: Message, state: FSMContext):
         return
     if args[1].strip() == ADMIN_SECRET_PASSWORD:
         ACTIVE_ADMINS.add(message.from_user.id)
-        res = await message.answer("🔓 <b>Доступ предоставлен.</b> Сессия администратора запущена.\nКоманда управления: /admin", parse_mode=ParseMode.HTML)
+        res = await message.answer("🔓 <b>Доступ предоставлен.</b> Сессия администратора запущена.\nКоманды управления:\n• /admin — Панель управления\n• /medcard <user_id> — Заполнить медкарту\n• /points <user_id> <сумма> — Управление баллами", parse_mode=ParseMode.HTML)
     else:
         res = await message.answer("❌ Неверный секретный пароль.")
     await track_msg(message.chat.id, res.message_id)
+
+@router.message(Command("points"), IsAdminFilter())
+async def cmd_manage_points(message: Message, command: CommandObject):
+    if not command.args:
+        await message.answer("❌ <b>Использование:</b> <code>/points <user_id> <количество></code>\nПример: <code>/points 12345678 100</code> (или -50 для списания)", parse_mode=ParseMode.HTML)
+        return
+    
+    parts = command.args.split()
+    if len(parts) < 2:
+        await message.answer("❌ Укажите ID пользователя и количество баллов.")
+        return
+        
+    try:
+        target_id = int(parts[0])
+        amount = int(parts[1])
+        await db_add_points(target_id, amount)
+        await message.answer(f"✅ Баланс пользователя <code>{target_id}</code> изменен на <b>{amount}</b> баллов.", parse_mode=ParseMode.HTML)
+        
+        try:
+            await bot.send_message(target_id, f"💎 <b>Изменение баланса баллов!</b>\nАдминистратор изменил Ваш баланс на <b>{amount}</b> баллов.", parse_mode=ParseMode.HTML)
+        except Exception:
+            pass
+    except ValueError:
+        await message.answer("❌ Некорректный ID или сумма баллов.")
 
 @router.message(Command("admin"), IsAdminFilter())
 async def cmd_admin_panel(message: Message, state: FSMContext):
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Лист ожидания (Модерация)", callback_data="adm_view_pending")],
+        [InlineKeyboardButton(text="🏥 Внести диагноз в медкарту", callback_data="adm_fill_medcard")],
         [InlineKeyboardButton(text="📢 Рассылка по сегментам", callback_data="adm_start_broadcast")],
         [InlineKeyboardButton(text="📊 Аналитика (UTM)", callback_data="adm_view_analytics")]
     ])
     res = await message.answer("<b>⚡ ПАНЕЛЬ УПРАВЛЕНИЯ КЛИНИКИ</b>\n\nВыберите действие:", reply_markup=admin_kb, parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
 
+@router.callback_query(F.data == "adm_fill_medcard", IsAdminFilter())
+async def adm_fill_medcard_callback(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await state.set_state(DoctorMedCardStates.entering_user_id)
+    await callback.message.answer("🩺 Введите <b>ID Пациента</b>, которому необходимо внести диагноз и назначения:")
+
 @router.callback_query(F.data == "adm_view_analytics", IsAdminFilter())
 async def adm_view_analytics(callback: CallbackQuery):
     await callback.answer()
     users = await db_get_all_users()
     sources = {}
+    total_points = 0
     for user in users.values():
         utm = user.get("utm_source", "Прямой переход")
         sources[utm] = sources.get(utm, 0) + 1
+        total_points += user.get("points", 0)
     
-    report = "<b>📊 МАРКЕТИНГОВЫЙ ОТЧЕТ (UTM):</b>\n\n"
+    report = (
+        "<b>📊 МАРКЕТИНГОВЫЙ И БОНУСНЫЙ ОТЧЕТ:</b>\n\n"
+        f"• Всего зарегистрировано пациентов: <b>{len(users)}</b>\n"
+        f"• Всего выданных баллов лояльности: 💎 <b>{total_points}</b>\n\n"
+        "<b>Источники трафика (UTM):</b>\n"
+    )
     if not sources:
         report += "Нет собранных данных по источникам."
     for src, count in sources.items():
@@ -782,6 +1095,7 @@ async def adm_view_pending_applications(callback: CallbackQuery):
     for user_id, app_data in list(apps.items()):
         moderation_kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Одобрить и выгрузить в МИС", callback_data=f"adm_approve_{user_id}")],
+            [InlineKeyboardButton(text="🩺 Заполнить Медкарту", callback_data=f"adm_medcard_for_{user_id}")],
             [InlineKeyboardButton(text="❌ Отклонить заявку", callback_data=f"adm_reject_{user_id}")]
         ])
         
@@ -799,6 +1113,14 @@ async def adm_view_pending_applications(callback: CallbackQuery):
             await callback.message.answer_document(document=app_data["file_id"], caption=info, reply_markup=moderation_kb, parse_mode=ParseMode.HTML)
         else:
             await callback.message.answer(info, reply_markup=moderation_kb, parse_mode=ParseMode.HTML)
+
+@router.callback_query(F.data.startswith("adm_medcard_for_"), IsAdminFilter())
+async def adm_medcard_for_user(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    user_id = int(callback.data.split("_")[3])
+    await state.update_data(target_user_id=user_id)
+    await state.set_state(DoctorMedCardStates.entering_diagnosis)
+    await callback.message.answer(f"🩺 Введите медицинский <b>диагноз</b> для пациента {user_id}:", parse_mode=ParseMode.HTML)
 
 @router.callback_query(F.data.startswith("adm_approve_"), IsAdminFilter())
 @router.callback_query(F.data.startswith("adm_reject_"), IsAdminFilter())
@@ -923,10 +1245,13 @@ async def pre_checkout_handler(pre_checkout_query: PreCheckoutQuery):
 @router.message(F.successful_payment)
 async def successful_payment_handler(message: Message):
     payment = message.successful_payment
+    # Начисляем 200 баллов за донат
+    await db_add_points(message.from_user.id, 200)
+
     await message.answer(
         f"💖 <b>Огромное спасибо за вашу поддержку!</b>\n"
         f"Платеж на сумму <b>{payment.total_amount} Telegram Stars ⭐️</b> успешно проведен.\n"
-        f"Средства направлены на развитие IT-инфраструктуры клиники.",
+        f"Вам дополнительно зачислено 💎 <b>+200 баллов лояльности!</b>",
         parse_mode=ParseMode.HTML
     )
 
@@ -942,14 +1267,14 @@ async def faq_handler(message: Message, state: FSMContext):
         "<b>Часто запрашиваемые темы:</b>\n"
         "• <i>«Где вы находитесь?»</i>\n"
         "• <i>«Как подготовиться к анализам?»</i>\n"
-        "• <i>«Нужен налоговый вычет»</i>"
+        "• <i>«Как проверить свои баллы и медкарту?»</i>"
     )
     res = await message.answer(instruction, parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
 
 @router.message(F.text == "💰 Цены")
 async def prices_handler(message: Message, state: FSMContext):
-    res = await message.answer("<b>💰 Цены:</b>\n• Первичный осмотр: 0 руб (по квоте)\n• Анализ снимков КТ: 0 руб.", parse_mode=ParseMode.HTML)
+    res = await message.answer("<b>💰 Цены:</b>\n• Первичный осмотр: 0 руб (по квоте)\n• Анализ снимков КТ: 0 руб.\n• Оплата балльными бонусами: До 100% стоимости!", parse_mode=ParseMode.HTML)
     await track_msg(message.chat.id, res.message_id)
 
 @router.message(F.text == "📍 Адреса")
@@ -987,7 +1312,7 @@ async def donation_menu(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="❤️ Поддержать 10 ⭐️", callback_data="donate_10"),
          InlineKeyboardButton(text="❤️ Поддержать 50 ⭐️", callback_data="donate_50")]
     ])
-    res = await message.answer("💝 Вы можете внести благотворительный взнос на развитие IT-инфраструктуры в Telegram Stars:", reply_markup=donation_kb)
+    res = await message.answer("💝 Вы можете внести благотворительный взнос в Telegram Stars и получить дополнительные баллы лояльности:", reply_markup=donation_kb)
     await track_msg(message.chat.id, res.message_id)
 
 # ═══════════════════════════════════════════════════
@@ -997,8 +1322,8 @@ async def donation_menu(message: Message, state: FSMContext):
 @router.message(F.text)
 async def handle_user_question(message: Message, state: FSMContext):
     menu_buttons = [
-        "🚀 Открыть Mini App", "🩺 Оставить заявку на прием", "👤 Личный кабинет", "⭐ Отзывы клиники",
-        "ℹ️ Служба поддержки (FAQ)", "📞 Связаться с оператором", "💰 Цены",
+        "🚀 Открыть Mini App", "🩺 Оставить заявку на прием", "👤 Личный кабинет", "🏥 Моя Медкарта",
+        "⭐ Отзывы клиники", "ℹ️ Служба поддержки (FAQ)", "📞 Связаться с оператором", "💰 Цены",
         "📍 Адреса", "💝 Пожертвовать клинике"
     ]
     if message.text in menu_buttons or message.text.startswith("/"):
@@ -1030,7 +1355,7 @@ async def handle_user_question(message: Message, state: FSMContext):
             pass
 
 # ═══════════════════════════════════════════════════
-#         ДОРАБОТАННЫЙ БЭКЕНД (AIOHTTP REST API)
+#   БЭКЕНД И REST API ДЛЯ МИНИ АПП (AIOHTTP)
 # ═══════════════════════════════════════════════════
 
 async def render_health_check(request):
@@ -1050,6 +1375,7 @@ async def handle_api_booking(request):
         
         await db_add_application(user_id, fullname, phone, direction, "Mini App API", comment, None)
         await db_update_user_profile(user_id, fullname=fullname, phone=phone, direction=direction)
+        await db_add_points(user_id, 100)
         
         targets = list(ACTIVE_ADMINS)
         if ADMIN_CHAT_ID != 0:
@@ -1068,7 +1394,7 @@ async def handle_api_booking(request):
             except Exception:
                 pass
                 
-        return web.json_response({"status": "ok", "message": "Заявка успешно создана"})
+        return web.json_response({"status": "ok", "message": "Заявка создана, начислено +100 баллов"})
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
 
@@ -1077,9 +1403,61 @@ async def handle_get_profile(request):
         user_id = int(request.match_info.get("user_id"))
         user_data = await db_get_user(user_id) or {}
         app_data = await db_get_user_application(user_id)
+        medcard_data = await db_get_medcard(user_id)
         return web.json_response({
             "user": user_data,
-            "application": app_data
+            "application": app_data,
+            "medcard": medcard_data
+        })
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=400)
+
+async def handle_get_medcard_api(request):
+    try:
+        user_id = int(request.match_info.get("user_id"))
+        card = await db_get_medcard(user_id)
+        return web.json_response({"status": "ok", "medcard": card})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=400)
+
+async def handle_post_medcard_api(request):
+    try:
+        data = await request.json()
+        user_id = int(data.get("user_id"))
+        author_role = data.get("role", "patient") # 'patient' или 'doctor'
+        
+        if author_role == "doctor":
+            await db_update_medcard(
+                user_id=user_id,
+                diagnosis=data.get("diagnosis"),
+                prescriptions=data.get("prescriptions"),
+                updated_by="Врач (Mini App API)"
+            )
+        else:
+            await db_update_medcard(
+                user_id=user_id,
+                blood_type=data.get("blood_type"),
+                allergies=data.get("allergies"),
+                chronic_diseases=data.get("chronic_diseases"),
+                updated_by="Пациент (Mini App API)"
+            )
+        return web.json_response({"status": "ok", "message": "Медицинская карта обновлена"})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=400)
+
+async def handle_post_points_api(request):
+    try:
+        data = await request.json()
+        user_id = int(data.get("user_id"))
+        amount = int(data.get("amount", 0))
+        
+        await db_add_points(user_id, amount)
+        updated_user = await db_get_user(user_id)
+        
+        return web.json_response({
+            "status": "ok",
+            "message": "Баланс успешно обновлен",
+            "new_balance": updated_user.get("points", 0) if updated_user else 0
         })
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
@@ -1114,6 +1492,11 @@ async def main():
     app.router.add_get("/api/doctors", handle_get_doctors)
     app.router.add_post("/api/booking", handle_api_booking)
     app.router.add_get("/api/profile/{user_id}", handle_get_profile)
+    
+    # Новые эндпоинты для системы баллов и медкарты
+    app.router.add_get("/api/medcard/{user_id}", handle_get_medcard_api)
+    app.router.add_post("/api/medcard", handle_post_medcard_api)
+    app.router.add_post("/api/points", handle_post_points_api)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -1124,7 +1507,7 @@ async def main():
     except Exception as e:
         logging.warning(f"Не удалось запустить веб-сервер на порту {port}: {e}")
 
-    print("🚀 Бот запущен с асинхронной БД, Личным Кабинетом, REST API и поддержкой Telegram Stars!")
+    print("🚀 Бот запущен! Добавлены система баллов, электронные медицинские карты и обновленное REST API для Mini App.")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
