@@ -77,11 +77,6 @@ class AdminStates(StatesGroup):
     choosing_broadcast_segment = State()
     typing_reply = State()
 
-class PatientMedCardStates(StatesGroup):
-    entering_blood_type = State()
-    entering_allergies = State()
-    entering_chronic = State()
-
 class DoctorMedCardStates(StatesGroup):
     entering_user_id = State()
     entering_diagnosis = State()
@@ -134,19 +129,30 @@ async def init_db():
                 count INTEGER
             )
         """)
+        
+        # Обновленная таблица медкарты без зашитых шаблонных значений
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS medical_cards (
                 user_id INTEGER PRIMARY KEY,
-                blood_type TEXT DEFAULT 'Не указана',
-                allergies TEXT DEFAULT 'Не указано',
-                chronic_diseases TEXT DEFAULT 'Не указано',
-                diagnosis TEXT DEFAULT 'Не поставлен',
-                prescriptions TEXT DEFAULT 'Нет назначений',
-                updated_by TEXT DEFAULT 'Система',
+                blood_type TEXT DEFAULT NULL,
+                allergies TEXT DEFAULT NULL,
+                chronic_diseases TEXT DEFAULT NULL,
+                emergency_contact TEXT DEFAULT NULL,
+                notes TEXT DEFAULT NULL,
+                diagnosis TEXT DEFAULT NULL,
+                prescriptions TEXT DEFAULT NULL,
+                updated_by TEXT DEFAULT 'Пациент',
                 updated_at TEXT DEFAULT (datetime('now', 'localtime'))
             )
         """)
         
+        # Миграция колонок на случай, если БД уже существует
+        for col in ["emergency_contact TEXT", "notes TEXT"]:
+            try:
+                await conn.execute(f"ALTER TABLE medical_cards ADD COLUMN {col}")
+            except Exception:
+                pass
+
         async with conn.execute("SELECT COUNT(*) FROM reviews_stats") as cursor:
             row = await cursor.fetchone()
             if not row or row[0] == 0:
@@ -207,12 +213,12 @@ async def db_get_all_users():
             rows = await cursor.fetchall()
             return {r[0]: {"fullname": r[1], "phone": r[2], "utm_source": r[3], "last_direction": r[4], "points": r[5]} for r in rows}
 
-# --- МЕДИЦИНСКИЕ КАРТЫ (БД) ---
+# --- МЕДИЦИНСКИЕ КАРТЫ (ОБНОВЛЕННАЯ СУБД) ---
 
 async def db_get_medcard(user_id: int):
     async with aiosqlite.connect(DB_FILE) as conn:
         async with conn.execute("""
-            SELECT blood_type, allergies, chronic_diseases, diagnosis, prescriptions, updated_by, updated_at
+            SELECT blood_type, allergies, chronic_diseases, emergency_contact, notes, diagnosis, prescriptions, updated_by, updated_at
             FROM medical_cards WHERE user_id = ?
         """, (user_id,)) as cursor:
             row = await cursor.fetchone()
@@ -221,43 +227,46 @@ async def db_get_medcard(user_id: int):
                     "blood_type": row[0],
                     "allergies": row[1],
                     "chronic_diseases": row[2],
-                    "diagnosis": row[3],
-                    "prescriptions": row[4],
-                    "updated_by": row[5],
-                    "updated_at": row[6]
+                    "emergency_contact": row[3],
+                    "notes": row[4],
+                    "diagnosis": row[5],
+                    "prescriptions": row[6],
+                    "updated_by": row[7],
+                    "updated_at": row[8]
                 }
     return None
 
 async def db_update_medcard(user_id: int, blood_type: str = None, allergies: str = None,
-                           chronic_diseases: str = None, diagnosis: str = None,
-                           prescriptions: str = None, updated_by: str = "patient"):
+                           chronic_diseases: str = None, emergency_contact: str = None,
+                           notes: str = None, diagnosis: str = None, prescriptions: str = None,
+                           updated_by: str = "Пациент (Mini App)"):
     card = await db_get_medcard(user_id)
     async with aiosqlite.connect(DB_FILE) as conn:
         if not card:
             await conn.execute("""
-                INSERT INTO medical_cards (user_id, blood_type, allergies, chronic_diseases, diagnosis, prescriptions, updated_by, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+                INSERT INTO medical_cards (
+                    user_id, blood_type, allergies, chronic_diseases, emergency_contact, notes,
+                    diagnosis, prescriptions, updated_by, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
             """, (
-                user_id,
-                blood_type or "Не указана",
-                allergies or "Не указано",
-                chronic_diseases or "Не указано",
-                diagnosis or "Не поставлен",
-                prescriptions or "Нет назначений",
-                updated_by
+                user_id, blood_type, allergies, chronic_diseases, emergency_contact, notes,
+                diagnosis, prescriptions, updated_by
             ))
         else:
             new_blood = blood_type if blood_type is not None else card["blood_type"]
             new_allergies = allergies if allergies is not None else card["allergies"]
             new_chronic = chronic_diseases if chronic_diseases is not None else card["chronic_diseases"]
+            new_em_contact = emergency_contact if emergency_contact is not None else card["emergency_contact"]
+            new_notes = notes if notes is not None else card["notes"]
             new_diag = diagnosis if diagnosis is not None else card["diagnosis"]
             new_presc = prescriptions if prescriptions is not None else card["prescriptions"]
 
             await conn.execute("""
                 UPDATE medical_cards
-                SET blood_type = ?, allergies = ?, chronic_diseases = ?, diagnosis = ?, prescriptions = ?, updated_by = ?, updated_at = datetime('now', 'localtime')
+                SET blood_type = ?, allergies = ?, chronic_diseases = ?, emergency_contact = ?, notes = ?,
+                    diagnosis = ?, prescriptions = ?, updated_by = ?, updated_at = datetime('now', 'localtime')
                 WHERE user_id = ?
-            """, (new_blood, new_allergies, new_chronic, new_diag, new_presc, updated_by, user_id))
+            """, (new_blood, new_allergies, new_chronic, new_em_contact, new_notes, new_diag, new_presc, updated_by, user_id))
         await conn.commit()
 
 async def db_add_application(user_id: int, fullname: str, phone: str, direction: str, utm_source: str, comment: str, file_id: str):
@@ -301,7 +310,7 @@ async def db_update_reviews_stats(stars: int):
         await conn.commit()
 
 # ═══════════════════════════════════════════════════
-#    АВТО-ПЕРЕХВАТ (MIDDLEWARE) И ОЧИСТКА ЧАТА
+#    АВТО-ПЕРЕХВАТ И ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ═══════════════════════════════════════════════════
 
 class AutoMessageTrackerMiddleware(BaseMiddleware):
@@ -374,7 +383,7 @@ def get_skip_kb(callback_action: str) -> InlineKeyboardMarkup:
     ])
 
 # ═══════════════════════════════════════════════════
-#             ОБНОВЛЕННАЯ КОМАНДА /START + РЕФЕРАЛЫ
+#             КОМАНДА /START + РЕФЕРАЛЫ
 # ═══════════════════════════════════════════════════
 
 @router.message(Command("start"))
@@ -428,7 +437,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
     await track_msg(message.chat.id, menu_res.message_id)
 
 # ═══════════════════════════════════════════════════
-#  ОБНОВЛЕННЫЙ ЛИЧНЫЙ КАБИНЕТ С БАЛЛАМИ ЛОЯЛЬНОСТИ
+#                ЛИЧНЫЙ КАБИНЕТ
 # ═══════════════════════════════════════════════════
 
 @router.message(F.text == "👤 Личный кабинет")
@@ -468,8 +477,7 @@ async def user_cabinet(message: Message, state: FSMContext):
     )
 
     cabinet_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏥 Просмотреть Медкарту", callback_data="open_medcard")],
-        [InlineKeyboardButton(text="🚀 Открыть Кабинет в Mini App", web_app=WebAppInfo(url=MINI_APP_URL))],
+        [InlineKeyboardButton(text="🏥 Моя Медкарта (Mini App)", web_app=WebAppInfo(url=MINI_APP_URL))],
         [InlineKeyboardButton(text="🔄 Обновить данные", callback_data="refresh_cabinet")]
     ])
 
@@ -514,8 +522,7 @@ async def refresh_cabinet_handler(callback: CallbackQuery):
     )
 
     cabinet_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🏥 Просмотреть Медкарту", callback_data="open_medcard")],
-        [InlineKeyboardButton(text="🚀 Открыть Кабинет в Mini App", web_app=WebAppInfo(url=MINI_APP_URL))],
+        [InlineKeyboardButton(text="🏥 Моя Медкарта (Mini App)", web_app=WebAppInfo(url=MINI_APP_URL))],
         [InlineKeyboardButton(text="🔄 Обновить данные", callback_data="refresh_cabinet")]
     ])
 
@@ -525,35 +532,47 @@ async def refresh_cabinet_handler(callback: CallbackQuery):
         pass
 
 # ═══════════════════════════════════════════════════
-#         ЭЛЕКТРОННАЯ МЕДИЦИНСКАЯ КАРТА
+#  ОБНОВЛЕННАЯ ЭЛЕКТРОННАЯ МЕДИЦИНСКАЯ КАРТА (MINI APP)
 # ═══════════════════════════════════════════════════
 
 async def render_medcard_view(user_id: int):
     card = await db_get_medcard(user_id)
-    if not card:
-        return (
+    
+    # Если медкарта еще не создана или пуста
+    if not card or not any([card.get("blood_type"), card.get("allergies"), card.get("chronic_diseases")]):
+        text = (
             "<b>🏥 ЭЛЕКТРОННАЯ МЕДИЦИНСКАЯ КАРТА</b>\n\n"
-            "<i>Карта еще не заполнена. Вы можете указать свои базовые данные о здоровье или дождаться занесения данных врачом.</i>",
-            InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✏️ Заполнить анкету здоровья (Пациент)", callback_data="fill_patient_medcard")]
-            ])
+            "<i>Медицинская карта еще не заполнена. Вы можете быстро заполнить анкету здоровья прямо внутри Mini App!</i>"
         )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ Заполнить медкарту в Mini App", web_app=WebAppInfo(url=MINI_APP_URL))]
+        ])
+        return text, kb
+    
+    blood = card.get("blood_type") or "Не указана"
+    allergies = card.get("allergies") or "Не указано"
+    chronic = card.get("chronic_diseases") or "Не указано"
+    emergency = card.get("emergency_contact") or "Не указан"
+    notes = card.get("notes") or "Отсутствуют"
+    diagnosis = card.get("diagnosis") or "Не поставлен"
+    prescriptions = card.get("prescriptions") or "Нет назначений"
     
     text = (
         "<b>🏥 ЭЛЕКТРОННАЯ МЕДИЦИНСКАЯ КАРТА</b>\n\n"
-        "<b>👤 Личные медицинские данные (Заполняет пациент):</b>\n"
-        f"• Группа крови и резус-фактор: <b>{card['blood_type']}</b>\n"
-        f"• Аллергические реакции: <b>{card['allergies']}</b>\n"
-        f"• Хронические заболевания: <b>{card['chronic_diseases']}</b>\n\n"
-        "<b>🩺 Врачебные заключения (Заполняет лечащий врач):</b>\n"
-        f"• Текущий диагноз: <b>{card['diagnosis']}</b>\n"
-        f"• Назначенное лечение/лекарства: <b>{card['prescriptions']}</b>\n\n"
-        f"🕒 <i>Последнее обновление: {card['updated_at']} (Автор: {card['updated_by']})</i>"
+        "<b>👤 Личные данные (Заполнены в Mini App):</b>\n"
+        f"• Группа крови и резус: <b>{blood}</b>\n"
+        f"• Аллергические реакции: <b>{allergies}</b>\n"
+        f"• Хронические заболевания: <b>{chronic}</b>\n"
+        f"• Контакт на случай ЧС: <b>{emergency}</b>\n"
+        f"• Особенности/Заметки: <i>{notes}</i>\n\n"
+        "<b>🩺 Заключение лечащего врача:</b>\n"
+        f"• Диагноз: <b>{diagnosis}</b>\n"
+        f"• Рекомендации/Назначения: <b>{prescriptions}</b>\n\n"
+        f"🕒 <i>Обновлено: {card['updated_at']} ({card['updated_by']})</i>"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Редактировать мои данные", callback_data="fill_patient_medcard")],
-        [InlineKeyboardButton(text="🚀 Открыть карту в Mini App", web_app=WebAppInfo(url=MINI_APP_URL))]
+        [InlineKeyboardButton(text="✏️ Редактировать в Mini App", web_app=WebAppInfo(url=MINI_APP_URL))]
     ])
     return text, kb
 
@@ -569,47 +588,6 @@ async def show_medcard_handler(event: Message | CallbackQuery):
     else:
         res = await event.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await track_msg(event.from_user.id, res.message_id)
-
-@router.callback_query(F.data == "fill_patient_medcard")
-async def start_patient_medcard(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await state.set_state(PatientMedCardStates.entering_blood_type)
-    res = await callback.message.answer("🩸 Укажите Вашу <b>группу крови и резус-фактор</b> (например, <i>'A(II) Rh+'</i>):", parse_mode=ParseMode.HTML)
-    await track_msg(callback.message.chat.id, res.message_id)
-
-@router.message(PatientMedCardStates.entering_blood_type, F.text)
-async def process_patient_blood(message: Message, state: FSMContext):
-    await state.update_data(blood_type=html.escape(message.text.strip()))
-    await state.set_state(PatientMedCardStates.entering_allergies)
-    res = await message.answer("⚠️ Укажите имеющиеся <b>аллергические реакции</b> (или напишите <i>'Нет'</i>):", parse_mode=ParseMode.HTML)
-    await track_msg(message.chat.id, res.message_id)
-
-@router.message(PatientMedCardStates.entering_allergies, F.text)
-async def process_patient_allergies(message: Message, state: FSMContext):
-    await state.update_data(allergies=html.escape(message.text.strip()))
-    await state.set_state(PatientMedCardStates.entering_chronic)
-    res = await message.answer("🏥 Перечислите ваши <b>хронические заболевания</b> (или напишите <i>'Нет'</i>):", parse_mode=ParseMode.HTML)
-    await track_msg(message.chat.id, res.message_id)
-
-@router.message(PatientMedCardStates.entering_chronic, F.text)
-async def process_patient_chronic(message: Message, state: FSMContext):
-    data = await state.get_data()
-    chronic = html.escape(message.text.strip())
-    await state.clear()
-
-    await db_update_medcard(
-        user_id=message.from_user.id,
-        blood_type=data.get("blood_type"),
-        allergies=data.get("allergies"),
-        chronic_diseases=chronic,
-        updated_by="Пациент"
-    )
-
-    res = await message.answer("✅ <b>Ваши медицинские данные успешно сохранены в медкарте!</b>", parse_mode=ParseMode.HTML)
-    await track_msg(message.chat.id, res.message_id)
-
-    text, kb = await render_medcard_view(message.from_user.id)
-    await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
 
 # --- ФОРМА ЗАПОЛНЕНИЯ МЕДКАРТЫ ВРАЧОМ / АДМИНОМ ---
 
@@ -701,9 +679,11 @@ async def handle_web_app_data(message: Message):
                 blood_type=data.get("blood_type"),
                 allergies=data.get("allergies"),
                 chronic_diseases=data.get("chronic_diseases"),
+                emergency_contact=data.get("emergency_contact"),
+                notes=data.get("notes"),
                 updated_by="Mini App (Пациент)"
             )
-            await message.answer("🏥 <b>Электронная медкарта успешно обновлена из Mini App!</b>", parse_mode=ParseMode.HTML)
+            await message.answer("🏥 <b>Электронная медкарта успешно обновлена через Mini App!</b>", parse_mode=ParseMode.HTML)
 
         elif action in ["quick_booking", "mini_app_booking"]:
             doctor = data.get("doctor", "Врач клиники")
@@ -733,7 +713,7 @@ async def handle_web_app_data(message: Message):
         await message.answer("⚠️ Произошла ошибка при обработке данных из Mini App.")
 
 # ═══════════════════════════════════════════════════
-#         ДИНАМИЧЕСКАЯ СИСТЕМА ОТЗЫВОВ
+#         СИСТЕМА ОТЗЫВОВ КЛИНИКИ
 # ═══════════════════════════════════════════════════
 
 @router.message(F.text == "⭐ Отзывы клиники")
@@ -1372,7 +1352,7 @@ async def donation_menu(message: Message, state: FSMContext):
     await track_msg(message.chat.id, res.message_id)
 
 # ═══════════════════════════════════════════════════
-#  ГЛОБАЛЬНЫЙ ПЕРЕХВАТЧИК СЛУЧАЙНОГО ТЕКСТА (ВОПРОСОВ)
+#  ГЛОБАЛЬНЫЙ ПЕРЕХВАТЧИК СЛУЧАЙНОГО ТЕКСТА
 # ═══════════════════════════════════════════════════
 
 @router.message(F.text)
@@ -1481,6 +1461,7 @@ async def handle_get_medcard_api(request):
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
 
+# ОБНОВЛЕННЫЙ ЭНДПОИНТ: Сохранение медкарты из Mini App
 async def handle_post_medcard_api(request):
     try:
         data = await request.json()
@@ -1504,9 +1485,28 @@ async def handle_post_medcard_api(request):
                 blood_type=data.get("blood_type"),
                 allergies=data.get("allergies"),
                 chronic_diseases=data.get("chronic_diseases"),
-                updated_by="Пациент (Mini App API)"
+                emergency_contact=data.get("emergency_contact"),
+                notes=data.get("notes"),
+                updated_by="Пациент (Mini App)"
             )
-        return web.json_response({"status": "ok", "message": "Медицинская карта обновлена"})
+            
+            # Отправка уведомления пользователю в боте после сохранения
+            try:
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        "🏥 <b>Медицинская карта успешно обновлена!</b>\n\n"
+                        f"• Группа крови: <b>{data.get('blood_type') or 'Не указана'}</b>\n"
+                        f"• Аллергии: <b>{data.get('allergies') or 'Не указано'}</b>\n"
+                        f"• Хронические заболевания: <b>{data.get('chronic_diseases') or 'Не указано'}</b>\n\n"
+                        "<i>Данные переданы Вашему лечащему врачу.</i>"
+                    ),
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception:
+                pass
+
+        return web.json_response({"status": "ok", "message": "Медицинская карта сохранена"})
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
 
@@ -1574,7 +1574,7 @@ async def main():
     except Exception as e:
         logging.warning(f"Не удалось запустить веб-сервер на порту {port}: {e}")
 
-    print("🚀 Бот запущен! Добавлены система баллов, электронные медицинские карты и обновленное REST API для Mini App.")
+    print("🚀 Бот запущен! Медкарта переведена на самостоятельное заполнение в Mini App.")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
