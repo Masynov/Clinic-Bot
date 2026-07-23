@@ -1,455 +1,396 @@
-HTML
 <!DOCTYPE html>
 <html lang="ru">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Прайм - Кабинет пациента</title>
+    <title>Клиника «ПРАЙМ»</title>
+    <!-- Telegram WebApp SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root {
             --bg-color: var(--tg-theme-bg-color, #f4f6f9);
-            --text-color: var(--tg-theme-text-color, #222);
-            --hint-color: var(--tg-theme-hint-color, #707579);
-            --button-color: var(--tg-theme-button-color, #2481cc);
-            --button-text-color: var(--tg-theme-button-text-color, #fff);
             --card-bg: var(--tg-theme-secondary-bg-color, #ffffff);
+            --text-color: var(--tg-theme-text-color, #222222);
+            --hint-color: var(--tg-theme-hint-color, #888888);
+            --btn-color: var(--tg-theme-button-color, #007aff);
+            --btn-text: var(--tg-theme-button-text-color, #ffffff);
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background-color: var(--bg-color);
             color: var(--text-color);
             margin: 0;
             padding: 0;
-            padding-bottom: 70px;
+            padding-bottom: 80px;
         }
 
         .header {
             padding: 16px;
             background: var(--card-bg);
             text-align: center;
-            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
-        }
-
-        .header h2 {
-            margin: 0;
-            font-size: 20px;
-        }
-
-        .header p {
-            margin: 4px 0 0;
-            font-size: 13px;
-            color: var(--hint-color);
+            font-weight: 700;
+            font-size: 18px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.08);
         }
 
         .container {
             padding: 16px;
-            max-width: 600px;
-            margin: auto;
-        }
-
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.active {
-            display: block;
         }
 
         .card {
             background: var(--card-bg);
-            border-radius: 12px;
+            border-radius: 14px;
             padding: 16px;
-            margin-bottom: 12px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+            margin-bottom: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
         }
 
-        .card h3 {
-            margin-top: 0;
-            font-size: 16px;
-            color: var(--button-color);
+        .card-title {
+            font-size: 17px;
+            font-weight: 600;
+            margin-bottom: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
-        label {
-            display: block;
-            font-size: 13px;
+        .field-group {
+            margin-bottom: 14px;
+        }
+
+        .field-label {
+            font-size: 12px;
             color: var(--hint-color);
-            margin-bottom: 6px;
+            margin-bottom: 4px;
+            display: block;
+            font-weight: 500;
+        }
+
+        .field-value {
+            font-size: 15px;
+            font-weight: 500;
         }
 
         input,
         select,
         textarea {
             width: 100%;
-            padding: 10px;
-            border-radius: 8px;
-            border: 1px solid #ccc;
-            background: var(--bg-color);
-            color: var(--text-color);
-            margin-bottom: 12px;
+            padding: 12px;
+            border: 1px solid #d0d7de;
+            border-radius: 10px;
+            font-size: 15px;
             box-sizing: border-box;
-            font-family: inherit;
-        }
-
-        textarea {
-            resize: vertical;
-            min-height: 60px;
-        }
-
-        .slots-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 8px;
-            margin-bottom: 12px;
-        }
-
-        .slot-btn {
-            padding: 8px;
             background: var(--bg-color);
-            border: 1px solid var(--button-color);
             color: var(--text-color);
-            border-radius: 6px;
-            text-align: center;
-            cursor: pointer;
-            font-size: 14px;
-            transition: all 0.2s ease;
+            margin-top: 4px;
+            outline: none;
         }
 
-        .slot-btn.selected {
-            background: var(--button-color);
-            color: var(--button-text-color);
-            font-weight: bold;
+        input:focus,
+        select:focus,
+        textarea:focus {
+            border-color: var(--btn-color);
         }
 
         .btn {
-            background: var(--button-color);
-            color: var(--button-text-color);
+            background-color: var(--btn-color);
+            color: var(--btn-text);
             border: none;
-            width: 100%;
-            padding: 12px;
-            border-radius: 8px;
-            font-weight: bold;
-            cursor: pointer;
+            padding: 14px;
+            border-radius: 10px;
             font-size: 15px;
-            transition: opacity 0.2s ease;
+            font-weight: 600;
+            width: 100%;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: opacity 0.2s;
+        }
+
+        .btn:active {
+            opacity: 0.8;
         }
 
         .btn:disabled {
-            background: #b0bec5 !important;
+            background-color: #a2a2a2;
             cursor: not-allowed;
-            opacity: 0.7;
+        }
+
+        .btn-secondary {
+            background-color: #e5e5ea;
+            color: #333333;
+        }
+
+        .btn-link {
+            background: none;
+            border: none;
+            color: var(--btn-color);
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
         }
 
         .nav-bar {
             position: fixed;
             bottom: 0;
             left: 0;
-            width: 100%;
+            right: 0;
+            height: 65px;
             background: var(--card-bg);
             display: flex;
             justify-content: space-around;
-            padding: 8px 0;
-            border-top: 1px solid rgba(0, 0, 0, 0.1);
-            box-sizing: border-box;
+            align-items: center;
+            border-top: 1px solid rgba(0, 0, 0, 0.08);
+            z-index: 100;
         }
 
         .nav-item {
-            text-align: center;
             font-size: 11px;
             color: var(--hint-color);
+            text-align: center;
+            background: none;
+            border: none;
             cursor: pointer;
             flex: 1;
+            padding: 8px 0;
         }
 
         .nav-item.active {
-            color: var(--button-color);
-            font-weight: bold;
+            color: var(--btn-color);
+            font-weight: 600;
         }
 
-        .nav-icon {
-            font-size: 18px;
-            display: block;
-            margin-bottom: 2px;
-        }
-
-        .info-badge {
-            background: rgba(36, 129, 204, 0.1);
-            color: var(--button-color);
-            padding: 8px 12px;
-            border-radius: 8px;
-            font-size: 13px;
-            margin-bottom: 12px;
+        .hidden {
+            display: none !important;
         }
     </style>
 </head>
 
 <body>
 
-    <div class="header">
-        <h2>Медицинский центр «ПРАЙМ»</h2>
-        <p>Электронный портал пациента</p>
-    </div>
+    <div class="header">Клиника «ПРАЙМ»</div>
 
     <div class="container">
 
-        <!-- ВКЛАДКА 1: ИНТЕРАКТИВНАЯ ЗАПИСЬ -->
-        <div id="tab-booking" class="tab-content active">
-            <div class="card">
-                <h3>📅 Онлайн-запись на прием</h3>
+        <!-- 1. ВКЛАДКА: ЗАПИСЬ НА ПРИЕМ -->
+        <div id="tab-booking" class="tab-content card">
+            <div class="card-title">📅 Запись на прием</div>
 
-                <label>Выберите специалиста:</label>
-                <select id="doctorSelect" onchange="validateBookingForm()">
-                    <option value="Иванов И.И. (Кардиолог)">д.м.н. Иванов И.И. (Кардиолог)</option>
-                    <option value="Петрова А.С. (Терапевт)">к.м.н. Петрова А.С. (Терапевт)</option>
-                </select>
-
-                <label>Дата приема:</label>
-                <input type="date" id="bookingDate" onchange="validateBookingForm()">
-
-                <label>Доступное время:</label>
-                <div class="slots-grid" id="slotsContainer">
-                    <div class="slot-btn" onclick="selectSlot(this)">09:00</div>
-                    <div class="slot-btn" onclick="selectSlot(this)">10:30</div>
-                    <div class="slot-btn" onclick="selectSlot(this)">12:00</div>
-                    <div class="slot-btn" onclick="selectSlot(this)">14:00</div>
-                    <div class="slot-btn" onclick="selectSlot(this)">15:30</div>
-                    <div class="slot-btn" onclick="selectSlot(this)">17:00</div>
+            <form id="booking-form">
+                <div class="field-group">
+                    <label class="field-label">Врач или услуга *</label>
+                    <select id="book-doctor" required>
+                        <option value="">-- Выберите специалиста --</option>
+                        <option value="Терапевт">Терапевт</option>
+                        <option value="Кардиолог">Кардиолог</option>
+                        <option value="Невролог">Невролог</option>
+                        <option value="Стоматолог">Стоматолог</option>
+                        <option value="УЗИ диагностика">УЗИ диагностика</option>
+                    </select>
                 </div>
 
-                <label>Контактный телефон:</label>
-                <input type="tel" id="bookingPhone" placeholder="+7 (999) 000-00-00" oninput="validateBookingForm()">
-
-                <button class="btn" id="submitBookingBtn" disabled onclick="submitBooking()">
-                    Подтвердить запись
-                </button>
-            </div>
-        </div>
-
-        <!-- ВКЛАДКА 2: ИНТЕРАКТИВНАЯ ЭМК (ЭЛЕКТРОННАЯ МЕДКАРТА) -->
-        <div id="tab-emr" class="tab-content">
-            <div class="card">
-                <h3>📋 Моя Медицинская Карта</h3>
-                <div class="info-badge">
-                    Заполните медицинские данные для формирования электронного профиля пациента.
+                <div class="field-group">
+                    <label class="field-label">Желаемые дата и время *</label>
+                    <input type="datetime-local" id="book-datetime" required>
                 </div>
 
-                <label>Группа крови и резус-фактор:</label>
-                <select id="emrBloodType">
-                    <option value="Не указана">Не указано</option>
-                    <option value="O(I) Rh+">O(I) Rh+ (Первая положительная)</option>
-                    <option value="O(I) Rh-">O(I) Rh- (Первая отрицательная)</option>
-                    <option value="A(II) Rh+">A(II) Rh+ (Вторая положительная)</option>
-                    <option value="A(II) Rh-">A(II) Rh- (Вторая отрицательная)</option>
-                    <option value="B(III) Rh+">B(III) Rh+ (Третья положительная)</option>
-                    <option value="B(III) Rh-">B(III) Rh- (Третья отрицательная)</option>
-                    <option value="AB(IV) Rh+">AB(IV) Rh+ (Четвертая положительная)</option>
-                    <option value="AB(IV) Rh-">AB(IV) Rh- (Четвертая отрицательная)</option>
-                </select>
+                <div class="field-group">
+                    <label class="field-label">Номер телефона *</label>
+                    <input type="tel" id="book-phone" placeholder="+7 (999) 000-00-00" required>
+                </div>
 
-                <label>Аллергические реакции:</label>
-                <textarea id="emrAllergies" placeholder="Лекарственные препараты, продукты питания..."></textarea>
+                <div class="field-group">
+                    <label class="field-label">Комментарий к записи</label>
+                    <textarea id="book-comment" rows="2" placeholder="Опишите симптомы или пожелания..."></textarea>
+                </div>
 
-                <label>Хронические заболевания / Особенности:</label>
-                <textarea id="emrChronic" placeholder="Укажите диагностированные хронические заболевания..."></textarea>
-
-                <button class="btn" onclick="submitMedCard()">Сохранить медицинскую карту</button>
-            </div>
+                <button type="submit" id="btn-submit-booking" class="btn">Подтвердить запись</button>
+            </form>
         </div>
 
-        <!-- ВКЛАДКА 3: ПАКЕТЫ УСЛУГ И ОПЛАТА -->
-        <div id="tab-packages" class="tab-content">
-            <div class="card">
-                <h3>🎁 Комплексные чекапы</h3>
-                <p>Пакетные предложения со скидкой до 20%.</p>
-                <hr style="border:0; border-top:1px solid rgba(0,0,0,0.05); margin: 12px 0;">
-                <div style="margin-bottom: 14px;">
-                    <b>❤️ «Здоровое сердце»</b><br>
-                    <span style="font-size: 13px; color: var(--hint-color);">Прием кардиолога + ЭКГ +
-                        Липидограмма</span><br>
-                    <b>4 500 руб. / 45 ⭐️</b><br>
-                    <button class="btn" style="margin-top: 8px; padding: 8px;"
-                        onclick="buyPackage('Пакет: Здоровое сердце', 45)">Оплатить звёздами</button>
+        <!-- 2. ВКЛАДКА: ЭМК -->
+        <div id="tab-emk" class="tab-content card hidden">
+            <!-- Просмотр ЭМК -->
+            <div id="emk-view">
+                <div class="card-title">
+                    <span>🩺 Электронная медкарта</span>
+                    <button type="button" class="btn-link" onclick="toggleEmkEdit(true)">Изменить</button>
+                </div>
+                <div class="field-group">
+                    <span class="field-label">ФИО Пациента</span>
+                    <div class="field-value" id="val-fullname">Не заполнено</div>
+                </div>
+                <div class="field-group">
+                    <span class="field-label">Группа крови</span>
+                    <div class="field-value" id="val-blood">Не указано</div>
+                </div>
+                <div class="field-group">
+                    <span class="field-label">Аллергические реакции</span>
+                    <div class="field-value" id="val-allergies">Нет</div>
+                </div>
+                <div class="field-group">
+                    <span class="field-label">Хронические заболевания</span>
+                    <div class="field-value" id="val-chronic">Нет</div>
                 </div>
             </div>
+
+            <!-- Форма редактирования ЭМК -->
+            <form id="emk-edit" class="hidden">
+                <div class="card-title">Заполнение ЭМК</div>
+
+                <div class="field-group">
+                    <label class="field-label">ФИО *</label>
+                    <input type="text" id="input-fullname" required placeholder="Иванов Иван Иванович">
+                </div>
+
+                <div class="field-group">
+                    <label class="field-label">Группа крови и резус-фактор</label>
+                    <select id="input-blood">
+                        <option value="Не указано">Не выбрано</option>
+                        <option value="O(I) Rh+">O(I) Rh+ (1+)</option>
+                        <option value="O(I) Rh-">O(I) Rh- (1-)</option>
+                        <option value="A(II) Rh+">A(II) Rh+ (2+)</option>
+                        <option value="A(II) Rh-">A(II) Rh- (2-)</option>
+                        <option value="B(III) Rh+">B(III) Rh+ (3+)</option>
+                        <option value="B(III) Rh-">B(III) Rh- (3-)</option>
+                        <option value="AB(IV) Rh+">AB(IV) Rh+ (4+)</option>
+                        <option value="AB(IV) Rh-">AB(IV) Rh- (4-)</option>
+                    </select>
+                </div>
+
+                <div class="field-group">
+                    <label class="field-label">Аллергии</label>
+                    <textarea id="input-allergies" rows="2" placeholder="Лекарства, продукты..."></textarea>
+                </div>
+
+                <div class="field-group">
+                    <label class="field-label">Хронические заболевания</label>
+                    <textarea id="input-chronic" rows="2" placeholder="Астма, диабет и др."></textarea>
+                </div>
+
+                <button type="submit" id="btn-submit-emk" class="btn">Сохранить ЭМК</button>
+                <button type="button" class="btn btn-secondary" onclick="toggleEmkEdit(false)">Отмена</button>
+            </form>
         </div>
 
-        <!-- ВКЛАДКА 4: ИСПРАВЛЕННАЯ ЛОЯЛЬНОСТЬ -->
-        <div id="tab-loyalty" class="tab-content">
-            <div class="card">
-                <h3>⭐ Программа лояльности</h3>
-                <p style="font-size: 26px; font-weight: bold; color: var(--button-color); margin: 8px 0;"
-                    id="userPointsText">
-                    ... баллов
-                </p>
-                <p style="font-size: 13px; color: var(--hint-color);">Кэшбэк 5% с каждого посещения клиники.</p>
-                <hr style="border:0; border-top:1px solid rgba(0,0,0,0.05); margin: 12px 0;">
-                <h4>Реферальная программа:</h4>
-                <p style="font-size: 13px;">Пригласите друга и получите <b>200 баллов</b> на ваш счет сразу после его
-                    регистрации!</p>
-                <button class="btn" onclick="copyRefLink()">Скопировать реферальную ссылку</button>
-            </div>
+        <!-- 3. ВКЛАДКА: ПАКЕТЫ УСЛУГ -->
+        <div id="tab-packages" class="tab-content card hidden">
+            <div class="card-title">📦 Комплексные программы</div>
+            <p style="color:var(--hint-color);">Раздел находится в разработке.</p>
+        </div>
+
+        <!-- 4. ВКЛАДКА: БОНУСЫ -->
+        <div id="tab-loyalty" class="tab-content card hidden">
+            <div class="card-title">⭐ Программа лояльности</div>
+            <p style="color:var(--hint-color);">Ваш баланс: 0 баллов.</p>
         </div>
 
     </div>
 
-    <!-- НИЖНЯЯ ПАНЕЛЬ НАВИГАЦИИ -->
+    <!-- НИЖНЕЕ МЕНЮ НАВИГАЦИИ -->
     <div class="nav-bar">
-        <div class="nav-item active" onclick="switchTab('booking', this)">
-            <span class="nav-icon">📅</span>Запись
-        </div>
-        <div class="nav-item" onclick="switchTab('emr', this)">
-            <span class="nav-icon">📋</span>ЭМК
-        </div>
-        <div class="nav-item" onclick="switchTab('packages', this)">
-            <span class="nav-icon">🎁</span>Пакеты
-        </div>
-        <div class="nav-item" onclick="switchTab('loyalty', this)">
-            <span class="nav-icon">⭐</span>Бонусы
-        </div>
+        <button class="nav-item active" onclick="switchTab('booking', this)">📅 Запись</button>
+        <button class="nav-item" onclick="switchTab('emk', this)">📋 ЭМК</button>
+        <button class="nav-item" onclick="switchTab('packages', this)">📦 Пакеты</button>
+        <button class="nav-item" onclick="switchTab('loyalty', this)">⭐ Бонусы</button>
     </div>
 
     <script>
+        // Инициализация Telegram WebApp
         const tg = window.Telegram.WebApp;
+        tg.ready();
         tg.expand();
 
-        let selectedTime = null;
-
-        // Устанавливаем сегодняшнюю дату по умолчанию
-        document.getElementById('bookingDate').valueAsDate = new Date();
-
-        function switchTab(tabId, element) {
-            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-
-            document.getElementById('tab-' + tabId).classList.add('active');
-            element.classList.add('active');
+        // Переключение вкладок
+        function switchTab(tabName, el) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.add('hidden'));
+            document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+            document.getElementById('tab-' + tabName).classList.remove('hidden');
+            el.classList.add('active');
         }
 
-        // 1. ВАЛИДАЦИЯ И АКТИВАЦИЯ КНОПКИ ПОДТВЕРЖДЕНИЯ
-        function selectSlot(element) {
-            document.querySelectorAll('.slot-btn').forEach(el => el.classList.remove('selected'));
-            element.classList.add('selected');
-            selectedTime = element.innerText;
-            validateBookingForm();
-        }
-
-        function validateBookingForm() {
-            const date = document.getElementById('bookingDate').value;
-            const phone = document.getElementById('bookingPhone').value.trim();
-            const submitBtn = document.getElementById('submitBookingBtn');
-
-            // Очищаем номер от нецифровых символов для проверки длины (10 или 11 цифр)
-            const cleanPhone = phone.replace(/\D/g, '');
-            const isPhoneValid = cleanPhone.length >= 10 && cleanPhone.length <= 11;
-
-            if (date && selectedTime && isPhoneValid) {
-                submitBtn.disabled = false;
-                submitBtn.innerText = "Подтвердить запись";
+        // Переключение режима ЭМК
+        function toggleEmkEdit(isEdit) {
+            if (isEdit) {
+                document.getElementById('emk-view').classList.add('hidden');
+                document.getElementById('emk-edit').classList.remove('hidden');
             } else {
-                submitBtn.disabled = true;
-                if (!selectedTime) {
-                    submitBtn.innerText = "Выберите время приема";
-                } else if (!isPhoneValid) {
-                    submitBtn.innerText = "Введите корректный телефон";
-                } else {
-                    submitBtn.innerText = "Заполните все поля";
-                }
+                document.getElementById('emk-edit').classList.add('hidden');
+                document.getElementById('emk-view').classList.remove('hidden');
             }
         }
 
-        function submitBooking() {
-            const doctor = document.getElementById('doctorSelect').value;
-            const date = document.getElementById('bookingDate').value;
-            const phone = document.getElementById('bookingPhone').value.trim();
+        // Загрузка локальных данных ЭМК
+        function loadEmk() {
+            const saved = localStorage.getItem('prime_emk_data');
+            if (saved) {
+                const data = JSON.parse(saved);
+                document.getElementById('val-fullname').innerText = data.fullname || 'Не заполнено';
+                document.getElementById('val-blood').innerText = data.blood || 'Не указано';
+                document.getElementById('val-allergies').innerText = data.allergies || 'Нет';
+                document.getElementById('val-chronic').innerText = data.chronic || 'Нет';
 
-            if (!date || !selectedTime || !phone) return;
-
-            const data = {
-                action: "mini_app_booking",
-                doctor: doctor,
-                date: date,
-                time: selectedTime,
-                phone: phone
-            };
-
-            tg.sendData(JSON.stringify(data));
+                document.getElementById('input-fullname').value = data.fullname || '';
+                document.getElementById('input-blood').value = data.blood || 'Не указано';
+                document.getElementById('input-allergies').value = data.allergies || '';
+                document.getElementById('input-chronic').value = data.chronic || '';
+            }
         }
 
-        // 2. ИНТЕРАКТИВНОЕ СОХРАНЕНИЕ МЕДКАРТЫ
-        function submitMedCard() {
-            const bloodType = document.getElementById('emrBloodType').value;
-            const allergies = document.getElementById('emrAllergies').value.trim() || 'Не указано';
-            const chronic = document.getElementById('emrChronic').value.trim() || 'Не указано';
+        // ОБРАБОТКА ФОРМЫ ЗАПИСИ (Кнопка "Подтвердить запись")
+        document.getElementById('booking-form').addEventListener('submit', function (event) {
+            // 1. Блокируем стандартную отправку страницы
+            event.preventDefault();
 
-            const data = {
-                action: "update_medcard",
-                blood_type: bloodType,
-                allergies: allergies,
-                chronic_diseases: chronic
+            const btn = document.getElementById('btn-submit-booking');
+            btn.disabled = true;
+            btn.innerText = "Отправка...";
+
+            const payload = {
+                action: 'new_booking',
+                doctor: document.getElementById('book-doctor').value,
+                datetime: document.getElementById('book-datetime').value,
+                phone: document.getElementById('book-phone').value,
+                comment: document.getElementById('book-comment').value
             };
 
-            tg.sendData(JSON.stringify(data));
-        }
-
-        function buyPackage(packageName, stars) {
-            const data = {
-                action: "mini_app_buy_package",
-                package: packageName,
-                price: stars
-            };
-            tg.sendData(JSON.stringify(data));
-        }
-
-        // 3. ИСПРАВЛЕННАЯ РЕФЕРАЛЬНАЯ СИСТЕМА
-        function copyRefLink() {
-            const userId = tg.initDataUnsafe?.user?.id || '000000';
-            const botUsername = "your_bot_username"; // Вкажите имя вашего бота без символа @
-            const refLink = `https://t.me/${botUsername}?start=ref_${userId}`;
-
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(refLink).then(() => {
-                    tg.showAlert('✅ Реферальная ссылка скопирована!');
-                }).catch(() => {
-                    prompt('Скопируйте вашу реферальную ссылку:', refLink);
-                });
+            // 2. Отправляем данные в Telegram
+            if (tg.sendData) {
+                tg.sendData(JSON.stringify(payload));
+                tg.close();
             } else {
-                prompt('Скопируйте вашу реферальную ссылку:', refLink);
+                alert("Запись оформлена! (Тестовый режим)");
+                btn.disabled = false;
+                btn.innerText = "Подтвердить запись";
             }
-        }
+        });
 
-        // Автоматическая загрузка профиля и баллов пользователя при открытии
-        async function loadUserProfile() {
-            const userId = tg.initDataUnsafe?.user?.id;
-            if (!userId) {
-                document.getElementById('userPointsText').innerText = '0 баллов';
-                return;
+        // ОБРАБОТКА ФОРМЫ ЭМК (Кнопка "Сохранить ЭМК")
+        document.getElementById('emk-edit').addEventListener('submit', function (event) {
+            event.preventDefault();
+
+            const payload = {
+                action: 'update_emk',
+                fullname: document.getElementById('input-fullname').value,
+                blood: document.getElementById('input-blood').value,
+                allergies: document.getElementById('input-allergies').value,
+                chronic: document.getElementById('input-chronic').value
+            };
+
+            // Сохраняем в браузер
+            localStorage.setItem('prime_emk_data', JSON.stringify(payload));
+            loadEmk();
+            toggleEmkEdit(false);
+
+            // Отправляем боту
+            if (tg.sendData) {
+                tg.sendData(JSON.stringify(payload));
             }
+        });
 
-            try {
-                const response = await fetch(`/api/profile/${userId}`);
-                if (response.ok) {
-                    const res = await response.json();
-                    if (res.user) {
-                        document.getElementById('userPointsText').innerText = `${res.user.points || 0} баллов`;
-                        if (res.user.phone) {
-                            document.getElementById('bookingPhone').value = res.user.phone;
-                        }
-                    }
-                    if (res.medcard) {
-                        if (res.medcard.blood_type) document.getElementById('emrBloodType').value = res.medcard.blood_type;
-                        if (res.medcard.allergies && res.medcard.allergies !== 'Не указано') document.getElementById('emrAllergies').value = res.medcard.allergies;
-                        if (res.medcard.chronic_diseases && res.medcard.chronic_diseases !== 'Не указано') document.getElementById('emrChronic').value = res.medcard.chronic_diseases;
-                    }
-                }
-            } catch (e) {
-                console.error("Ошибка загрузки профиля:", e);
-                document.getElementById('userPointsText').innerText = '0 баллов';
-            }
-        }
-
-        loadUserProfile();
+        // Загружаем данные при открытии
+        loadEmk();
     </script>
 </body>
 
