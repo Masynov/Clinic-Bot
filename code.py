@@ -6,7 +6,9 @@ import logging
 import asyncio
 import aiosqlite
 from aiohttp import web
+
 from aiogram import Bot, Dispatcher, F, Router, BaseMiddleware
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, Filter, CommandObject
 from aiogram.fsm.context import FSMContext
@@ -34,7 +36,10 @@ MINI_APP_URL = "https://masynov.github.io/Clinic-Bot/"
 ACTIVE_ADMINS = set()
 
 logging.basicConfig(level=logging.INFO)
-bot = Bot(token=BOT_TOKEN or "DUMMY_TOKEN")
+bot = Bot(
+    token=BOT_TOKEN or "DUMMY_TOKEN",
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 
@@ -130,7 +135,6 @@ async def init_db():
             )
         """)
         
-        # Обновленная таблица медкарты без зашитых шаблонных значений
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS medical_cards (
                 user_id INTEGER PRIMARY KEY,
@@ -146,7 +150,6 @@ async def init_db():
             )
         """)
         
-        # Миграция колонок на случай, если БД уже существует
         for col in ["emergency_contact TEXT", "notes TEXT"]:
             try:
                 await conn.execute(f"ALTER TABLE medical_cards ADD COLUMN {col}")
@@ -213,7 +216,7 @@ async def db_get_all_users():
             rows = await cursor.fetchall()
             return {r[0]: {"fullname": r[1], "phone": r[2], "utm_source": r[3], "last_direction": r[4], "points": r[5]} for r in rows}
 
-# --- МЕДИЦИНСКИЕ КАРТЫ (ОБНОВЛЕННАЯ СУБД) ---
+# --- МЕДИЦИНСКИЕ КАРТЫ ---
 
 async def db_get_medcard(user_id: int):
     async with aiosqlite.connect(DB_FILE) as conn:
@@ -383,6 +386,23 @@ def get_skip_kb(callback_action: str) -> InlineKeyboardMarkup:
     ])
 
 # ═══════════════════════════════════════════════════
+#             ОТМЕНА ЛЮБОГО ДЕЙСТВИЯ (/CANCEL)
+# ═══════════════════════════════════════════════════
+
+@router.message(Command("cancel"))
+@router.message(F.text.lower() == "отмена")
+async def cmd_cancel_handler(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
+        res = await message.answer("Нечего отменять.")
+        await track_msg(message.chat.id, res.message_id)
+        return
+    
+    await state.clear()
+    res = await message.answer("❌ <b>Действие отменено.</b>", reply_markup=get_full_main_menu())
+    await track_msg(message.chat.id, res.message_id)
+
+# ═══════════════════════════════════════════════════
 #             КОМАНДА /START + РЕФЕРАЛЫ
 # ═══════════════════════════════════════════════════
 
@@ -413,8 +433,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
             try:
                 await bot.send_message(
                     chat_id=referrer_id,
-                    text=f"🎉 <b>Новый реферал!</b> Пользователь {html.escape(message.from_user.full_name)} зарегистрировался по вашей ссылке. Вам начислено 💎 <b>+200 баллов</b>!",
-                    parse_mode=ParseMode.HTML
+                    text=f"🎉 <b>Новый реферал!</b> Пользователь {html.escape(message.from_user.full_name)} зарегистрировался по вашей ссылке. Вам начислено 💎 <b>+200 баллов</b>!"
                 )
             except Exception:
                 pass
@@ -430,7 +449,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
         [InlineKeyboardButton(text="🚀 Запустить Mini App", web_app=WebAppInfo(url=MINI_APP_URL))]
     ])
 
-    res = await message.answer(welcome_text, reply_markup=start_kb, parse_mode=ParseMode.HTML)
+    res = await message.answer(welcome_text, reply_markup=start_kb)
     await track_msg(message.chat.id, res.message_id)
     
     menu_res = await message.answer("Главное меню:", reply_markup=get_full_main_menu())
@@ -446,19 +465,19 @@ async def user_cabinet(message: Message, state: FSMContext):
     user_data = await db_get_user(user_id) or {}
     app_data = await db_get_user_application(user_id)
 
-    fullname = user_data.get("fullname") or message.from_user.full_name
-    phone = user_data.get("phone") or "Не указан"
-    utm = user_data.get("utm_source") or "Прямой переход"
-    last_dir = user_data.get("last_direction") or "Нет активных направлений"
+    fullname = html.escape(user_data.get("fullname") or message.from_user.full_name)
+    phone = html.escape(user_data.get("phone") or "Не указан")
+    utm = html.escape(user_data.get("utm_source") or "Прямой переход")
+    last_dir = html.escape(user_data.get("last_direction") or "Нет активных направлений")
     points = user_data.get("points", 0)
 
     if app_data:
         app_status_text = (
             f"\n\n<b>📋 ТЕКУЩАЯ ЗАЯВКА НА ПРИЕМ:</b>\n"
-            f"• Направление: {app_data['direction']}\n"
-            f"• Телефон: <code>{app_data['phone']}</code>\n"
-            f"• Статус заявки: <b>{app_data['status']}</b>\n"
-            f"• Комментарий: <i>{app_data['comment']}</i>"
+            f"• Направление: {html.escape(app_data['direction'])}\n"
+            f"• Телефон: <code>{html.escape(app_data['phone'])}</code>\n"
+            f"• Статус заявки: <b>{html.escape(app_data['status'])}</b>\n"
+            f"• Комментарий: <i>{html.escape(app_data['comment'])}</i>"
         )
     else:
         app_status_text = "\n\n<b>📋 ТЕКУЩАЯ ЗАЯВКА:</b>\n<i>Активных записей на прием не найдено.</i>"
@@ -481,7 +500,7 @@ async def user_cabinet(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="🔄 Обновить данные", callback_data="refresh_cabinet")]
     ])
 
-    res = await message.answer(cabinet_text, reply_markup=cabinet_kb, parse_mode=ParseMode.HTML)
+    res = await message.answer(cabinet_text, reply_markup=cabinet_kb)
     await track_msg(message.chat.id, res.message_id)
 
 @router.callback_query(F.data == "refresh_cabinet")
@@ -491,19 +510,19 @@ async def refresh_cabinet_handler(callback: CallbackQuery):
     user_data = await db_get_user(user_id) or {}
     app_data = await db_get_user_application(user_id)
 
-    fullname = user_data.get("fullname") or callback.from_user.full_name
-    phone = user_data.get("phone") or "Не указан"
-    utm = user_data.get("utm_source") or "Прямой переход"
-    last_dir = user_data.get("last_direction") or "Нет активных направлений"
+    fullname = html.escape(user_data.get("fullname") or callback.from_user.full_name)
+    phone = html.escape(user_data.get("phone") or "Не указан")
+    utm = html.escape(user_data.get("utm_source") or "Прямой переход")
+    last_dir = html.escape(user_data.get("last_direction") or "Нет активных направлений")
     points = user_data.get("points", 0)
 
     if app_data:
         app_status_text = (
             f"\n\n<b>📋 ТЕКУЩАЯ ЗАЯВКА НА ПРИЕМ:</b>\n"
-            f"• Направление: {app_data['direction']}\n"
-            f"• Телефон: <code>{app_data['phone']}</code>\n"
-            f"• Статус заявки: <b>{app_data['status']}</b>\n"
-            f"• Комментарий: <i>{app_data['comment']}</i>"
+            f"• Направление: {html.escape(app_data['direction'])}\n"
+            f"• Телефон: <code>{html.escape(app_data['phone'])}</code>\n"
+            f"• Статус заявки: <b>{html.escape(app_data['status'])}</b>\n"
+            f"• Комментарий: <i>{html.escape(app_data['comment'])}</i>"
         )
     else:
         app_status_text = "\n\n<b>📋 ТЕКУЩАЯ ЗАЯВКА:</b>\n<i>Активных записей на прием не найдено.</i>"
@@ -527,7 +546,7 @@ async def refresh_cabinet_handler(callback: CallbackQuery):
     ])
 
     try:
-        await callback.message.edit_text(cabinet_text, reply_markup=cabinet_kb, parse_mode=ParseMode.HTML)
+        await callback.message.edit_text(cabinet_text, reply_markup=cabinet_kb)
     except Exception:
         pass
 
@@ -538,7 +557,6 @@ async def refresh_cabinet_handler(callback: CallbackQuery):
 async def render_medcard_view(user_id: int):
     card = await db_get_medcard(user_id)
     
-    # Если медкарта еще не создана или пуста
     if not card or not any([card.get("blood_type"), card.get("allergies"), card.get("chronic_diseases")]):
         text = (
             "<b>🏥 ЭЛЕКТРОННАЯ МЕДИЦИНСКАЯ КАРТА</b>\n\n"
@@ -549,13 +567,15 @@ async def render_medcard_view(user_id: int):
         ])
         return text, kb
     
-    blood = card.get("blood_type") or "Не указана"
-    allergies = card.get("allergies") or "Не указано"
-    chronic = card.get("chronic_diseases") or "Не указано"
-    emergency = card.get("emergency_contact") or "Не указан"
-    notes = card.get("notes") or "Отсутствуют"
-    diagnosis = card.get("diagnosis") or "Не поставлен"
-    prescriptions = card.get("prescriptions") or "Нет назначений"
+    blood = html.escape(card.get("blood_type") or "Не указана")
+    allergies = html.escape(card.get("allergies") or "Не указано")
+    chronic = html.escape(card.get("chronic_diseases") or "Не указано")
+    emergency = html.escape(card.get("emergency_contact") or "Не указан")
+    notes = html.escape(card.get("notes") or "Отсутствуют")
+    diagnosis = html.escape(card.get("diagnosis") or "Не поставлен")
+    prescriptions = html.escape(card.get("prescriptions") or "Нет назначений")
+    updated_by = html.escape(card.get("updated_by") or "Пациент")
+    updated_at = html.escape(card.get("updated_at") or "")
     
     text = (
         "<b>🏥 ЭЛЕКТРОННАЯ МЕДИЦИНСКАЯ КАРТА</b>\n\n"
@@ -568,7 +588,7 @@ async def render_medcard_view(user_id: int):
         "<b>🩺 Заключение лечащего врача:</b>\n"
         f"• Диагноз: <b>{diagnosis}</b>\n"
         f"• Рекомендации/Назначения: <b>{prescriptions}</b>\n\n"
-        f"🕒 <i>Обновлено: {card['updated_at']} ({card['updated_by']})</i>"
+        f"🕒 <i>Обновлено: {updated_at} ({updated_by})</i>"
     )
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -584,10 +604,10 @@ async def show_medcard_handler(event: Message | CallbackQuery):
     
     if isinstance(event, CallbackQuery):
         await event.answer()
-        res = await event.message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        res = await event.message.answer(text, reply_markup=kb)
     else:
-        res = await event.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
-    await track_msg(event.from_user.id, res.message_id)
+        res = await event.answer(text, reply_markup=kb)
+    await track_msg(event.message.chat.id if isinstance(event, CallbackQuery) else event.chat.id, res.message_id)
 
 # --- ФОРМА ЗАПОЛНЕНИЯ МЕДКАРТЫ ВРАЧОМ / АДМИНОМ ---
 
@@ -598,14 +618,14 @@ async def cmd_doctor_edit_medcard(message: Message, command: CommandObject, stat
             target_id = int(command.args.strip())
             await state.update_data(target_user_id=target_id)
             await state.set_state(DoctorMedCardStates.entering_diagnosis)
-            res = await message.answer(f"🩺 <b>Заполнение медкарты для пациента ID {target_id}:</b>\n\nВведите медицинский <b>диагноз</b>:", parse_mode=ParseMode.HTML)
+            res = await message.answer(f"🩺 <b>Заполнение медкарты для пациента ID {target_id}:</b>\n\nВведите медицинский <b>диагноз</b>:")
             await track_msg(message.chat.id, res.message_id)
             return
         except ValueError:
             pass
 
     await state.set_state(DoctorMedCardStates.entering_user_id)
-    res = await message.answer("Введите <b>ID Пациента</b>, которому необходимо внести диагноз и назначения:", parse_mode=ParseMode.HTML)
+    res = await message.answer("Введите <b>ID Пациента</b>, которому необходимо внести диагноз и назначения:")
     await track_msg(message.chat.id, res.message_id)
 
 @router.message(DoctorMedCardStates.entering_user_id, F.text)
@@ -614,16 +634,17 @@ async def process_doctor_user_id(message: Message, state: FSMContext):
         target_id = int(message.text.strip())
         await state.update_data(target_user_id=target_id)
         await state.set_state(DoctorMedCardStates.entering_diagnosis)
-        res = await message.answer(f"🩺 Введите медицинский <b>диагноз</b> для пациента {target_id}:", parse_mode=ParseMode.HTML)
+        res = await message.answer(f"🩺 Введите медицинский <b>диагноз</b> для пациента {target_id}:")
         await track_msg(message.chat.id, res.message_id)
     except ValueError:
-        await message.answer("❌ Ошибка: ID пользователя должен состоять из цифр. Попробуйте еще раз.")
+        res = await message.answer("❌ Ошибка: ID пользователя должен состоять из цифр. Попробуйте еще раз.")
+        await track_msg(message.chat.id, res.message_id)
 
 @router.message(DoctorMedCardStates.entering_diagnosis, F.text)
 async def process_doctor_diagnosis(message: Message, state: FSMContext):
     await state.update_data(diagnosis=html.escape(message.text.strip()))
     await state.set_state(DoctorMedCardStates.entering_prescriptions)
-    res = await message.answer("💊 Введите <b>лечебные назначения, рецепты и рекомендации</b>:", parse_mode=ParseMode.HTML)
+    res = await message.answer("💊 Введите <b>лечебные назначения, рецепты и рекомендации</b>:")
     await track_msg(message.chat.id, res.message_id)
 
 @router.message(DoctorMedCardStates.entering_prescriptions, F.text)
@@ -642,14 +663,13 @@ async def process_doctor_prescriptions(message: Message, state: FSMContext):
             updated_by="Лечащий врач (Администрация)"
         )
 
-        res = await message.answer(f"✅ <b>Медкарта пациента ID {target_id} успешно обновлена!</b>", parse_mode=ParseMode.HTML)
+        res = await message.answer(f"✅ <b>Медкарта пациента ID {target_id} успешно обновлена!</b>")
         await track_msg(message.chat.id, res.message_id)
 
         try:
             await bot.send_message(
                 chat_id=target_id,
-                text="🩺 <b>Врач внес изменения в Вашу электронную медицинскую карту!</b>\nОткройте раздел «🏥 Моя Медкарта» для просмотра назначений.",
-                parse_mode=ParseMode.HTML
+                text="🩺 <b>Врач внес изменения в Вашу электронную медицинскую карту!</b>\nОткройте раздел «🏥 Моя Медкарта» для просмотра назначений."
             )
         except Exception:
             pass
@@ -671,7 +691,8 @@ async def handle_web_app_data(message: Message):
             fullname = data.get("fullname")
             phone = data.get("phone")
             await db_update_user_profile(user_id, fullname=fullname, phone=phone)
-            await message.answer("✅ <b>Данные вашего профиля успешно синхронизированы из Mini App!</b>", parse_mode=ParseMode.HTML)
+            res = await message.answer("✅ <b>Данные вашего профиля успешно синхронизированы из Mini App!</b>")
+            await track_msg(message.chat.id, res.message_id)
             
         elif action == "update_medcard":
             await db_update_medcard(
@@ -683,34 +704,37 @@ async def handle_web_app_data(message: Message):
                 notes=data.get("notes"),
                 updated_by="Mini App (Пациент)"
             )
-            await message.answer("🏥 <b>Электронная медкарта успешно обновлена через Mini App!</b>", parse_mode=ParseMode.HTML)
+            res = await message.answer("🏥 <b>Электронная медкарта успешно обновлена через Mini App!</b>")
+            await track_msg(message.chat.id, res.message_id)
 
         elif action in ["quick_booking", "mini_app_booking"]:
-            doctor = data.get("doctor", "Врач клиники")
-            date = data.get("date", "")
-            time = data.get("time", "")
-            phone = data.get("phone", "Не указан")
+            doctor = html.escape(data.get("doctor", "Врач клиники"))
+            date = html.escape(data.get("date", ""))
+            time = html.escape(data.get("time", ""))
+            phone = html.escape(data.get("phone", "Не указан"))
             
             comment = f"Запись через Mini App к {doctor} на {date} в {time}"
             await db_add_application(user_id, message.from_user.full_name, phone, doctor, "Mini App Direct", comment, None)
             await db_update_user_profile(user_id, fullname=message.from_user.full_name, phone=phone)
             await db_add_points(user_id, 100)
             
-            await message.answer(
+            res = await message.answer(
                 f"🚀 <b>Ваша запись принята!</b>\n"
                 f"• Специалист: {doctor}\n"
                 f"• Дата и время: {date} в {time}\n"
                 f"• Телефон: <code>{phone}</code>\n\n"
-                f"Вам начислено 💎 <b>+100 баллов</b> лояльности!",
-                parse_mode=ParseMode.HTML
+                f"Вам начислено 💎 <b>+100 баллов</b> лояльности!"
             )
+            await track_msg(message.chat.id, res.message_id)
             
         else:
-            await message.answer(f"📥 <b>Получены данные из веб-приложения:</b>\n<code>{html.escape(raw_json)}</code>", parse_mode=ParseMode.HTML)
+            res = await message.answer(f"📥 <b>Получены данные из веб-приложения:</b>\n<code>{html.escape(raw_json)}</code>")
+            await track_msg(message.chat.id, res.message_id)
 
     except Exception as e:
         logging.error(f"Ошибка при обработке WebApp Data: {e}")
-        await message.answer("⚠️ Произошла ошибка при обработке данных из Mini App.")
+        res = await message.answer("⚠️ Произошла ошибка при обработке данных из Mini App.")
+        await track_msg(message.chat.id, res.message_id)
 
 # ═══════════════════════════════════════════════════
 #         СИСТЕМА ОТЗЫВОВ КЛИНИКИ
@@ -731,8 +755,7 @@ async def review_handler(message: Message, state: FSMContext):
         f"<b>📊 Динамический рейтинг клиники: {avg_rating:.2f} / 5.00 ⭐</b>\n"
         f"<i>(Всего получено оценок от пациентов: {stats['count']})</i>\n\n"
         f"Пожалуйста, оцените качество обслуживания в нашей сети. За отзыв начисляется <b>+50 баллов</b> лояльности!", 
-        reply_markup=stars_markup, 
-        parse_mode=ParseMode.HTML
+        reply_markup=stars_markup
     )
     await track_msg(message.chat.id, res.message_id)
 
@@ -750,7 +773,7 @@ async def callback_view_reviews(callback: CallbackQuery):
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅️ Назад к оценке", callback_data="back_to_reviews_main")]
     ])
-    await callback.message.edit_text(reviews_text, reply_markup=back_kb, parse_mode=ParseMode.HTML)
+    await callback.message.edit_text(reviews_text, reply_markup=back_kb)
 
 @router.callback_query(F.data == "back_to_reviews_main")
 async def callback_back_to_reviews_main(callback: CallbackQuery):
@@ -766,8 +789,7 @@ async def callback_back_to_reviews_main(callback: CallbackQuery):
         f"<b>📊 Динамический рейтинг клиники: {avg_rating:.2f} / 5.00 ⭐</b>\n"
         f"<i>(Всего получено оценок от пациентов: {stats['count']})</i>\n\n"
         f"Пожалуйста, оцените качество обслуживания в нашей сети или прочитайте отзывы других людей:", 
-        reply_markup=stars_markup, 
-        parse_mode=ParseMode.HTML
+        reply_markup=stars_markup
     )
 
 @router.callback_query(F.data.startswith("rev_"))
@@ -790,7 +812,7 @@ async def process_smart_review(callback: CallbackQuery):
             "🌐 <a href='https://yandex.ru/maps'>Яндекс.Карты</a>\n"
             "🌐 <a href='https://prodoctorov.ru'>Портал ПроДокторов</a>"
         )
-        await callback.message.edit_text(good_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        await callback.message.edit_text(good_text, disable_web_page_preview=True)
     else:
         bad_text = (
             f"⚠️ <b>Принято. Нам очень жаль, что Вы столкнулись с неудобствами ({rating}/5).</b>\n\n"
@@ -798,7 +820,7 @@ async def process_smart_review(callback: CallbackQuery):
             "Ваш отзыв переведен в статус <b>«Претензия»</b> и направлен напрямую директору клиники. "
             "Служба контроля качества свяжется с Вами в течение 30 минут."
         )
-        await callback.message.edit_text(bad_text, parse_mode=ParseMode.HTML)
+        await callback.message.edit_text(bad_text)
         
         targets = set(ACTIVE_ADMINS)
         if ADMIN_CHAT_ID != 0:
@@ -807,8 +829,7 @@ async def process_smart_review(callback: CallbackQuery):
             try:
                 await bot.send_message(
                     chat_id=chat_id,
-                    text=f"🚨 <b>ЖАЛОБА/НЕГАТИВНЫЙ ОТЗЫВ</b>\n• Пациент: ID {callback.from_user.id}\n• Оценка: {rating} из 5\n• Требуется срочное вмешательство руководства!",
-                    parse_mode=ParseMode.HTML
+                    text=f"🚨 <b>ЖАЛОБА/НЕГАТИВНЫЙ ОТЗЫВ</b>\n• Пациент: ID {callback.from_user.id}\n• Оценка: {rating} из 5\n• Требуется срочное вмешательство руководства!"
                 )
             except Exception:
                 pass
@@ -821,7 +842,7 @@ async def process_smart_review(callback: CallbackQuery):
 async def start_booking(message: Message, state: FSMContext):
     await state.set_state(BookingStates.choosing_direction)
     progress = get_progress_bar(1)
-    res = await message.answer(f"{progress}\n<b>Шаг 1 из 8:</b> Выберите интересующее медицинское направление:", reply_markup=get_directions_kb(), parse_mode=ParseMode.HTML)
+    res = await message.answer(f"{progress}\n<b>Шаг 1 из 8:</b> Выберите интересующее медицинское направление:", reply_markup=get_directions_kb())
     await track_msg(message.chat.id, res.message_id)
 
 @router.callback_query(F.data == "cancel_booking")
@@ -845,7 +866,7 @@ async def process_direction(callback: CallbackQuery, state: FSMContext):
         buttons.append([InlineKeyboardButton(text="👩‍⚕️ к.м.н. Петрова А.С.", callback_data="doc_ther_1")])
     buttons.append([InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_booking")])
     
-    await callback.message.edit_text(f"{progress}\n<b>Шаг 2 из 8:</b> Выберите лечащего специалиста:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode=ParseMode.HTML)
+    await callback.message.edit_text(f"{progress}\n<b>Шаг 2 из 8:</b> Выберите лечащего специалиста:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 @router.callback_query(BookingStates.choosing_doctor, F.data.startswith("doc_"))
 async def process_doctor(callback: CallbackQuery, state: FSMContext):
@@ -858,7 +879,7 @@ async def process_doctor(callback: CallbackQuery, state: FSMContext):
         [InlineKeyboardButton(text="Выходной день (суббота)", callback_data="date_weekend")],
         [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_booking")]
     ])
-    await callback.message.edit_text(f"{progress}\n<b>Шаг 3 из 8:</b> Укажите желаемый временной диапазон для визита:", reply_markup=dates_kb, parse_mode=ParseMode.HTML)
+    await callback.message.edit_text(f"{progress}\n<b>Шаг 3 из 8:</b> Укажите желаемый временной диапазон для визита:", reply_markup=dates_kb)
 
 @router.callback_query(BookingStates.choosing_date, F.data.startswith("date_"))
 async def process_date(callback: CallbackQuery, state: FSMContext):
@@ -867,31 +888,43 @@ async def process_date(callback: CallbackQuery, state: FSMContext):
     await state.set_state(BookingStates.entering_name)
     
     progress = get_progress_bar(4)
-    await callback.message.edit_text(f"{progress}\n<b>Шаг 4 из 8:</b> Введите Ваши полные ФИО для медицинской карты:", parse_mode=ParseMode.HTML)
+    await callback.message.edit_text(f"{progress}\n<b>Шаг 4 из 8:</b> Введите Ваши полные ФИО для медицинской карты:")
 
 @router.message(BookingStates.entering_name, F.text)
 async def process_name(message: Message, state: FSMContext):
-    fullname = html.escape(message.text.strip())
+    text = message.text.strip()
+    if len(text) < 2:
+        res = await message.answer("❌ <b>Ошибка:</b> Имя слишком короткое. Введите Ваши корректные ФИО:")
+        await track_msg(message.chat.id, res.message_id)
+        return
+
+    fullname = html.escape(text)
     await state.update_data(fullname=fullname)
     
     await state.set_state(BookingStates.entering_birthdate)
     progress = get_progress_bar(5)
-    res = await message.answer(f"{progress}\n<b>Шаг 5 из 8:</b> Укажите Вашу дату рождения (в формате <i>ДД.ММ.ГГГГ</i>):", parse_mode=ParseMode.HTML)
+    res = await message.answer(f"{progress}\n<b>Шаг 5 из 8:</b> Укажите Вашу дату рождения (в формате <i>ДД.ММ.ГГГГ</i>):")
     await track_msg(message.chat.id, res.message_id)
 
 @router.message(BookingStates.entering_birthdate, F.text)
 async def process_birthdate(message: Message, state: FSMContext):
-    await state.update_data(birthdate=html.escape(message.text.strip()))
+    birthdate = message.text.strip()
+    if not re.match(r"^\d{2}\.\d{2}\.\d{4}$", birthdate):
+        res = await message.answer("❌ <b>Неверный формат даты.</b> Пожалуйста, укажите дату в формате <i>ДД.ММ.ГГГГ</i> (например, 15.08.1990):")
+        await track_msg(message.chat.id, res.message_id)
+        return
+
+    await state.update_data(birthdate=html.escape(birthdate))
     await state.set_state(BookingStates.entering_phone)
     progress = get_progress_bar(6)
-    res = await message.answer(f"{progress}\n<b>Шаг 6 из 8:</b> Введите контактный номер телефона в российском формате:", parse_mode=ParseMode.HTML)
+    res = await message.answer(f"{progress}\n<b>Шаг 6 из 8:</b> Введите контактный номер телефона в российском формате:")
     await track_msg(message.chat.id, res.message_id)
 
 @router.message(BookingStates.entering_phone, F.text)
 async def process_phone(message: Message, state: FSMContext):
     validated_phone = validate_russian_phone(message.text.strip())
     if not validated_phone:
-        res = await message.answer("❌ <b>Ошибка формата.</b> Требуется корректный российский номер (11 цифр). Попробуйте снова:", parse_mode=ParseMode.HTML)
+        res = await message.answer("❌ <b>Ошибка формата.</b> Требуется корректный российский номер (11 цифр). Попробуйте снова:")
         await track_msg(message.chat.id, res.message_id)
         return
     await state.update_data(phone=validated_phone)
@@ -900,8 +933,7 @@ async def process_phone(message: Message, state: FSMContext):
     progress = get_progress_bar(7)
     res = await message.answer(
         f"{progress}\n<b>Шаг 7 из 8 (ВТОРОЕ МНЕНИЕ):</b> Прикрепите рентген-снимок или КТ-исследование, если имеются на руках:", 
-        reply_markup=get_skip_kb("skip_file"), 
-        parse_mode=ParseMode.HTML
+        reply_markup=get_skip_kb("skip_file")
     )
     await track_msg(message.chat.id, res.message_id)
 
@@ -912,7 +944,7 @@ async def process_file_upload(message: Message, state: FSMContext):
     await state.set_state(BookingStates.entering_comment)
     
     progress = get_progress_bar(8)
-    res = await message.answer(f"{progress}\n<b>Шаг 8 из 8:</b> Кратко опишите симптомы, жалобы или цель визита:", reply_markup=get_skip_kb("skip_comment"), parse_mode=ParseMode.HTML)
+    res = await message.answer(f"{progress}\n<b>Шаг 8 из 8:</b> Кратко опишите симптомы, жалобы или цель визита:", reply_markup=get_skip_kb("skip_comment"))
     await track_msg(message.chat.id, res.message_id)
 
 @router.callback_query(BookingStates.attaching_file, F.data == "skip_file")
@@ -922,7 +954,7 @@ async def skip_file_upload(callback: CallbackQuery, state: FSMContext):
     await state.set_state(BookingStates.entering_comment)
     
     progress = get_progress_bar(8)
-    await callback.message.edit_text(f"{progress}\n<b>Шаг 8 из 8:</b> Кратко опишите симптомы, жалобы или цель визита:", reply_markup=get_skip_kb("skip_comment"), parse_mode=ParseMode.HTML)
+    await callback.message.edit_text(f"{progress}\n<b>Шаг 8 из 8:</b> Кратко опишите симптомы, жалобы или цель визита:", reply_markup=get_skip_kb("skip_comment"))
 
 @router.message(BookingStates.entering_comment, F.text)
 async def process_comment(message: Message, state: FSMContext):
@@ -965,7 +997,7 @@ async def render_booking_summary(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="❌ Сбросить анкету", callback_data="cancel_booking")]
     ])
     await state.set_state(BookingStates.confirming)
-    res = await message.answer(summary, reply_markup=confirm_kb, parse_mode=ParseMode.HTML)
+    res = await message.answer(summary, reply_markup=confirm_kb)
     await track_msg(message.chat.id, res.message_id)
 
 @router.callback_query(BookingStates.confirming, F.data == "final_submit_booking")
@@ -1005,19 +1037,23 @@ async def final_submit_booking_handler(callback: CallbackQuery, state: FSMContex
         f"• Telegram: {doctor['tg']}\n\n"
         "Администратор свяжется с Вами сразу после проверки параметров анкеты."
     )
-    res = await callback.message.answer(success_text, parse_mode=ParseMode.HTML, reply_markup=get_full_main_menu())
+    res = await callback.message.answer(success_text, reply_markup=get_full_main_menu())
     await track_msg(callback.message.chat.id, res.message_id)
+
+    safe_fullname = data.get('fullname', html.escape(callback.from_user.full_name))
+    safe_phone = data.get('phone', 'Не указан')
+    safe_comment = data.get('comment', '')
 
     await db_add_application(
         user_id=callback.from_user.id,
-        fullname=data.get('fullname', callback.from_user.full_name),
-        phone=data.get('phone', 'Не указан'),
+        fullname=safe_fullname,
+        phone=safe_phone,
         direction=direction_label,
         utm_source=utm,
-        comment=data.get('comment', ''),
+        comment=safe_comment,
         file_id=data.get('file_id')
     )
-    await db_update_user_profile(callback.from_user.id, fullname=data.get('fullname'), phone=data.get('phone'))
+    await db_update_user_profile(callback.from_user.id, fullname=safe_fullname, phone=safe_phone)
 
     targets = set(ACTIVE_ADMINS)
     if ADMIN_CHAT_ID != 0:
@@ -1030,9 +1066,8 @@ async def final_submit_booking_handler(callback: CallbackQuery, state: FSMContex
             ])
             await bot.send_message(
                 chat_id=chat_id,
-                text=f"🚨 <b>Поступила новая анкета!</b>\n• Пациент: {data.get('fullname')}\n• Телефон: {data.get('phone')}\n• Направление: {direction_label}\n• Трафик: {utm}",
-                reply_markup=admin_markup,
-                parse_mode=ParseMode.HTML
+                text=f"🚨 <b>Поступила новая анкета!</b>\n• Пациент: {safe_fullname}\n• Телефон: {safe_phone}\n• Направление: {direction_label}\n• Трафик: {html.escape(utm)}",
+                reply_markup=admin_markup
             )
         except Exception:
             pass
@@ -1047,12 +1082,12 @@ async def final_submit_booking_handler(callback: CallbackQuery, state: FSMContex
 async def cmd_auth_handler(message: Message, state: FSMContext):
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        res = await message.answer("❌ <b>Ошибка:</b> Не указан пароль.", parse_mode=ParseMode.HTML)
+        res = await message.answer("❌ <b>Ошибка:</b> Не указан пароль.")
         await track_msg(message.chat.id, res.message_id)
         return
     if args[1].strip() == ADMIN_SECRET_PASSWORD:
         ACTIVE_ADMINS.add(message.from_user.id)
-        res = await message.answer("🔓 <b>Доступ предоставлен.</b> Сессия администратора запущена.\nКоманды управления:\n• /admin — Панель управления\n• /medcard <user_id> — Заполнить медкарту\n• /points <user_id> <сумма> — Управление баллами", parse_mode=ParseMode.HTML)
+        res = await message.answer("🔓 <b>Доступ предоставлен.</b> Сессия администратора запущена.\nКоманды управления:\n• /admin — Панель управления\n• /medcard <user_id> — Заполнить медкарту\n• /points <user_id> <сумма> — Управление баллами")
     else:
         res = await message.answer("❌ Неверный секретный пароль.")
     await track_msg(message.chat.id, res.message_id)
@@ -1060,7 +1095,7 @@ async def cmd_auth_handler(message: Message, state: FSMContext):
 @router.message(Command("points"), IsAdminFilter())
 async def cmd_manage_points(message: Message, command: CommandObject):
     if not command.args:
-        await message.answer("❌ <b>Использование:</b> <code>/points <user_id> <количество></code>\nПример: <code>/points 12345678 100</code> (или -50 для списания)", parse_mode=ParseMode.HTML)
+        await message.answer("❌ <b>Использование:</b> <code>/points <user_id> <количество></code>\nПример: <code>/points 12345678 100</code> (или -50 для списания)")
         return
     
     parts = command.args.split()
@@ -1072,10 +1107,10 @@ async def cmd_manage_points(message: Message, command: CommandObject):
         target_id = int(parts[0])
         amount = int(parts[1])
         await db_add_points(target_id, amount)
-        await message.answer(f"✅ Баланс пользователя <code>{target_id}</code> изменен на <b>{amount}</b> баллов.", parse_mode=ParseMode.HTML)
+        await message.answer(f"✅ Баланс пользователя <code>{target_id}</code> изменен на <b>{amount}</b> баллов.")
         
         try:
-            await bot.send_message(target_id, f"💎 <b>Изменение баланса баллов!</b>\nАдминистратор изменил Ваш баланс на <b>{amount}</b> баллов.", parse_mode=ParseMode.HTML)
+            await bot.send_message(target_id, f"💎 <b>Изменение баланса баллов!</b>\nАдминистратор изменил Ваш баланс на <b>{amount}</b> баллов.")
         except Exception:
             pass
     except ValueError:
@@ -1089,7 +1124,7 @@ async def cmd_admin_panel(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="📢 Рассылка по сегментам", callback_data="adm_start_broadcast")],
         [InlineKeyboardButton(text="📊 Аналитика (UTM)", callback_data="adm_view_analytics")]
     ])
-    res = await message.answer("<b>⚡ ПАНЕЛЬ УПРАВЛЕНИЯ КЛИНИКИ</b>\n\nВыберите действие:", reply_markup=admin_kb, parse_mode=ParseMode.HTML)
+    res = await message.answer("<b>⚡ ПАНЕЛЬ УПРАВЛЕНИЯ КЛИНИКИ</b>\n\nВыберите действие:", reply_markup=admin_kb)
     await track_msg(message.chat.id, res.message_id)
 
 @router.callback_query(F.data == "adm_fill_medcard", IsAdminFilter())
@@ -1118,15 +1153,15 @@ async def adm_view_analytics(callback: CallbackQuery):
     if not sources:
         report += "Нет собранных данных по источникам."
     for src, count in sources.items():
-        report += f"• Источник <code>{src}</code>: {count} пользователей\n"
-    await callback.message.answer(report, parse_mode=ParseMode.HTML)
+        report += f"• Источник <code>{html.escape(src)}</code>: {count} пользователей\n"
+    await callback.message.answer(report)
 
 @router.callback_query(F.data == "adm_view_pending", IsAdminFilter())
 async def adm_view_pending_applications(callback: CallbackQuery):
     await callback.answer()
     apps = await db_get_all_applications()
     if not apps:
-        await callback.message.answer("📥 <b>Лист ожидания пуст.</b> Заявок на модерацию нет.", parse_mode=ParseMode.HTML)
+        await callback.message.answer("📥 <b>Лист ожидания пуст.</b> Заявок на модерацию нет.")
         return
     
     for user_id, app_data in list(apps.items()):
@@ -1138,18 +1173,18 @@ async def adm_view_pending_applications(callback: CallbackQuery):
         
         info = (
             f"📋 <b>Заявка от пользователя {user_id}:</b>\n"
-            f"• ФИО: {app_data['fullname']}\n"
-            f"• Телефон: <code>{app_data['phone']}</code>\n"
-            f"• Направление: {app_data['direction']}\n"
-            f"• Источник: <code>{app_data['utm_source']}</code>\n"
-            f"• Статус: {app_data['status']}\n"
-            f"• Комментарий: {app_data['comment']}\n"
+            f"• ФИО: {html.escape(app_data['fullname'])}\n"
+            f"• Телефон: <code>{html.escape(app_data['phone'])}</code>\n"
+            f"• Направление: {html.escape(app_data['direction'])}\n"
+            f"• Источник: <code>{html.escape(app_data['utm_source'])}</code>\n"
+            f"• Статус: {html.escape(app_data['status'])}\n"
+            f"• Комментарий: {html.escape(app_data['comment'])}\n"
         )
         
         if app_data.get("file_id"):
-            await callback.message.answer_document(document=app_data["file_id"], caption=info, reply_markup=moderation_kb, parse_mode=ParseMode.HTML)
+            await callback.message.answer_document(document=app_data["file_id"], caption=info, reply_markup=moderation_kb)
         else:
-            await callback.message.answer(info, reply_markup=moderation_kb, parse_mode=ParseMode.HTML)
+            await callback.message.answer(info, reply_markup=moderation_kb)
 
 @router.callback_query(F.data.startswith("adm_medcard_for_"), IsAdminFilter())
 async def adm_medcard_for_user(callback: CallbackQuery, state: FSMContext):
@@ -1157,7 +1192,7 @@ async def adm_medcard_for_user(callback: CallbackQuery, state: FSMContext):
     user_id = int(callback.data.split("_")[3])
     await state.update_data(target_user_id=user_id)
     await state.set_state(DoctorMedCardStates.entering_diagnosis)
-    await callback.message.answer(f"🩺 Введите медицинский <b>диагноз</b> для пациента {user_id}:", parse_mode=ParseMode.HTML)
+    await callback.message.answer(f"🩺 Введите медицинский <b>диагноз</b> для пациента {user_id}:")
 
 @router.callback_query(F.data.startswith("adm_approve_"), IsAdminFilter())
 @router.callback_query(F.data.startswith("adm_reject_"), IsAdminFilter())
@@ -1168,7 +1203,7 @@ async def process_moderation(callback: CallbackQuery):
     if action == "approve":
         await db_update_application_status(user_id, "Одобрено и выгружено в МИС ✅")
         try:
-            await bot.send_message(user_id, "🎉 <b>Ваша анкета успешно верифицирована!</b> Данные внесены в медицинскую систему клиники. Врач готов к приему.", parse_mode=ParseMode.HTML)
+            await bot.send_message(user_id, "🎉 <b>Ваша анкета успешно верифицирована!</b> Данные внесены в медицинскую систему клиники. Врач готов к приему.")
         except Exception:
             pass
         await callback.message.edit_text(callback.message.text + "\n\n🟢 <b>Вердикт: Одобрено и отправлено в МИС клиники</b>")
@@ -1204,7 +1239,7 @@ async def adm_execute_broadcast(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     segment = callback.data.replace("seg_", "")
     state_data = await state.get_data()
-    text = state_data.get("broadcast_text", "")
+    text = html.escape(state_data.get("broadcast_text", ""))
     await state.clear()
     
     users = await db_get_all_users()
@@ -1212,7 +1247,7 @@ async def adm_execute_broadcast(callback: CallbackQuery, state: FSMContext):
     for uid, profile in users.items():
         if segment == "all" or profile.get("last_direction") == f"dir_{segment}":
             try:
-                await bot.send_message(chat_id=uid, text=f"🔔 <b>Сообщение от клиники ПРАЙМ:</b>\n\n{text}", parse_mode=ParseMode.HTML)
+                await bot.send_message(chat_id=uid, text=f"🔔 <b>Сообщение от клиники ПРАЙМ:</b>\n\n{text}")
                 count += 1
             except Exception:
                 pass
@@ -1233,8 +1268,7 @@ async def ask_admin_reply(callback: CallbackQuery, state: FSMContext):
     
     await callback.message.answer(
         f"📝 <b>Режим ответа. Введите сообщение для пациента (ID: {target_user_id}):</b>\n\n"
-        f"<i>Пациент получит ваше сообщение мгновенно. Для отмены введите /admin.</i>", 
-        parse_mode=ParseMode.HTML
+        f"<i>Пациент получит ваше сообщение мгновенно. Для отмены введите /cancel.</i>"
     )
 
 @router.message(AdminStates.typing_reply, F.text)
@@ -1252,12 +1286,11 @@ async def send_admin_reply(message: Message, state: FSMContext):
     try:
         await bot.send_message(
             chat_id=target_user_id,
-            text=f"✉️ <b>Ответ от службы поддержки клиники ПРАЙМ:</b>\n\n{reply_text}",
-            parse_mode=ParseMode.HTML
+            text=f"✉️ <b>Ответ от службы поддержки клиники ПРАЙМ:</b>\n\n{reply_text}"
         )
         await message.answer("✅ Ответ успешно доставлен пациенту.")
     except Exception as e:
-        await message.answer(f"❌ <b>Ошибка доставки.</b> Подробнее: {e}", parse_mode=ParseMode.HTML)
+        await message.answer(f"❌ <b>Ошибка доставки.</b> Подробнее: {e}")
 
 @router.callback_query(F.data.startswith("donate_"))
 async def process_donation_invoice(callback: CallbackQuery):
@@ -1287,8 +1320,7 @@ async def successful_payment_handler(message: Message):
     await message.answer(
         f"💖 <b>Огромное спасибо за вашу поддержку!</b>\n"
         f"Платеж на сумму <b>{payment.total_amount} Telegram Stars ⭐️</b> успешно проведен.\n"
-        f"Вам дополнительно зачислено 💎 <b>+200 баллов лояльности!</b>",
-        parse_mode=ParseMode.HTML
+        f"Вам дополнительно зачислено 💎 <b>+200 баллов лояльности!</b>"
     )
 
 # ═══════════════════════════════════════════════════
@@ -1305,22 +1337,22 @@ async def faq_handler(message: Message, state: FSMContext):
         "• <i>«Как подготовиться к анализам?»</i>\n"
         "• <i>«Как проверить свои баллы и медкарту?»</i>"
     )
-    res = await message.answer(instruction, parse_mode=ParseMode.HTML)
+    res = await message.answer(instruction)
     await track_msg(message.chat.id, res.message_id)
 
 @router.message(F.text == "💰 Цены")
 async def prices_handler(message: Message, state: FSMContext):
-    res = await message.answer("<b>💰 Цены:</b>\n• Первичный осмотр: 0 руб (по квоте)\n• Анализ снимков КТ: 0 руб.\n• Оплата балльными бонусами: До 100% стоимости!", parse_mode=ParseMode.HTML)
+    res = await message.answer("<b>💰 Цены:</b>\n• Первичный осмотр: 0 руб (по квоте)\n• Анализ снимков КТ: 0 руб.\n• Оплата балльными бонусами: До 100% стоимости!")
     await track_msg(message.chat.id, res.message_id)
 
 @router.message(F.text == "📍 Адреса")
 async def address_handler(message: Message, state: FSMContext):
-    res = await message.answer("🏥 г. Москва, ул. Центральная, д. 45. Режим работы: 24/7.", parse_mode=ParseMode.HTML)
+    res = await message.answer("🏥 г. Москва, ул. Центральная, д. 45. Режим работы: 24/7.")
     await track_msg(message.chat.id, res.message_id)
 
 @router.message(F.text == "📞 Связаться с оператором")
 async def operator_handler(message: Message, state: FSMContext):
-    res = await message.answer("📞 <b>Запрос отправлен оператору.</b> Напишите ваш вопрос следующим сообщением, и свободный сотрудник подключится к чату.", parse_mode=ParseMode.HTML)
+    res = await message.answer("📞 <b>Запрос отправлен оператору.</b> Напишите ваш вопрос следующим сообщением, и свободный сотрудник подключится к чату.")
     await track_msg(message.chat.id, res.message_id)
     
     targets = set(ACTIVE_ADMINS)
@@ -1331,13 +1363,13 @@ async def operator_handler(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="💬 Подключиться к чату", callback_data=f"ans_user_{message.from_user.id}")]
     ])
     
+    safe_name = html.escape(message.from_user.full_name)
     for chat_id in targets:
         try:
             await bot.send_message(
                 chat_id=chat_id,
-                text=f"📞 <b>ВЫЗОВ ОПЕРАТОРА</b>\n\n• Пациент: {message.from_user.full_name} (ID: {message.from_user.id})\n• Статус: Ожидает сотрудника.",
-                reply_markup=reply_kb,
-                parse_mode=ParseMode.HTML
+                text=f"📞 <b>ВЫЗОВ ОПЕРАТОРА</b>\n\n• Пациент: {safe_name} (ID: {message.from_user.id})\n• Статус: Ожидает сотрудника.",
+                reply_markup=reply_kb
             )
         except Exception:
             pass
@@ -1368,7 +1400,7 @@ async def handle_user_question(message: Message, state: FSMContext):
     user_id = message.from_user.id
     question = html.escape(message.text.strip())
 
-    res = await message.answer("✨ <b>Ваш вопрос отправлен дежурному оператору клиники!</b>\nОтвет придет в этот чат в ближайшее время.", parse_mode=ParseMode.HTML)
+    res = await message.answer("✨ <b>Ваш вопрос отправлен дежурному оператору клиники!</b>\nОтвет придет в этот чат в ближайшее время.")
     await track_msg(message.chat.id, res.message_id)
 
     targets = set(ACTIVE_ADMINS)
@@ -1379,13 +1411,13 @@ async def handle_user_question(message: Message, state: FSMContext):
         [InlineKeyboardButton(text="✍️ Ответить пациенту", callback_data=f"ans_user_{user_id}")]
     ])
 
+    safe_name = html.escape(message.from_user.full_name)
     for chat_id in targets:
         try:
             await bot.send_message(
                 chat_id=chat_id,
-                text=f"❓ <b>НОВЫЙ ЗАПРОС В ПОДДЕРЖКУ</b>\n\n• <b>От:</b> {message.from_user.full_name} (ID: {user_id})\n• <b>Текст:</b> {question}",
-                reply_markup=reply_kb,
-                parse_mode=ParseMode.HTML
+                text=f"❓ <b>НОВЫЙ ЗАПРОС В ПОДДЕРЖКУ</b>\n\n• <b>От:</b> {safe_name} (ID: {user_id})\n• <b>Текст:</b> {question}",
+                reply_markup=reply_kb
             )
         except Exception:
             pass
@@ -1409,8 +1441,8 @@ async def handle_api_booking(request):
             
         user_id = int(raw_user_id)
         fullname = html.escape(data.get("fullname", "Пациент"))
-        phone = data.get("phone", "Не указан")
-        direction = data.get("direction", "Общая диагностика")
+        phone = html.escape(data.get("phone", "Не указан"))
+        direction = html.escape(data.get("direction", "Общая диагностика"))
         comment = html.escape(data.get("comment", "Заявка из Mini App"))
         
         await db_add_application(user_id, fullname, phone, direction, "Mini App API", comment, None)
@@ -1429,8 +1461,7 @@ async def handle_api_booking(request):
                 await bot.send_message(
                     chat_id=chat_id,
                     text=f"🚨 <b>Поступила новая анкета через API Mini App!</b>\n• Пациент: {fullname}\n• Телефон: {phone}\n• Направление: {direction}",
-                    reply_markup=admin_markup,
-                    parse_mode=ParseMode.HTML
+                    reply_markup=admin_markup
                 )
             except Exception:
                 pass
@@ -1461,7 +1492,6 @@ async def handle_get_medcard_api(request):
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=400)
 
-# ОБНОВЛЕННЫЙ ЭНДПОИНТ: Сохранение медкарты из Mini App
 async def handle_post_medcard_api(request):
     try:
         data = await request.json()
@@ -1490,18 +1520,16 @@ async def handle_post_medcard_api(request):
                 updated_by="Пациент (Mini App)"
             )
             
-            # Отправка уведомления пользователю в боте после сохранения
             try:
                 await bot.send_message(
                     chat_id=user_id,
                     text=(
                         "🏥 <b>Медицинская карта успешно обновлена!</b>\n\n"
-                        f"• Группа крови: <b>{data.get('blood_type') or 'Не указана'}</b>\n"
-                        f"• Аллергии: <b>{data.get('allergies') or 'Не указано'}</b>\n"
-                        f"• Хронические заболевания: <b>{data.get('chronic_diseases') or 'Не указано'}</b>\n\n"
+                        f"• Группа крови: <b>{html.escape(str(data.get('blood_type') or 'Не указана'))}</b>\n"
+                        f"• Аллергии: <b>{html.escape(str(data.get('allergies') or 'Не указано'))}</b>\n"
+                        f"• Хронические заболевания: <b>{html.escape(str(data.get('chronic_diseases') or 'Не указано'))}</b>\n\n"
                         "<i>Данные переданы Вашему лечащему врачу.</i>"
-                    ),
-                    parse_mode=ParseMode.HTML
+                    )
                 )
             except Exception:
                 pass
