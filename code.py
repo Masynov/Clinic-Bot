@@ -1030,11 +1030,77 @@ async def handle_user_question(message: Message, state: FSMContext):
             pass
 
 # ═══════════════════════════════════════════════════
-#                ТОЧКА ВХОДА В ПРОГРАММУ
+#         ДОРАБОТАННЫЙ БЭКЕНД (AIOHTTP REST API)
 # ═══════════════════════════════════════════════════
 
 async def render_health_check(request):
     return web.Response(text="ONLINE")
+
+async def handle_get_doctors(request):
+    return web.json_response(DB_DOCTORS)
+
+async def handle_api_booking(request):
+    try:
+        data = await request.json()
+        user_id = int(data.get("user_id"))
+        fullname = html.escape(data.get("fullname", "Пациент"))
+        phone = data.get("phone", "Не указан")
+        direction = data.get("direction", "Общая диагностика")
+        comment = html.escape(data.get("comment", "Заявка из Mini App"))
+        
+        await db_add_application(user_id, fullname, phone, direction, "Mini App API", comment, None)
+        await db_update_user_profile(user_id, fullname=fullname, phone=phone, direction=direction)
+        
+        targets = list(ACTIVE_ADMINS)
+        if ADMIN_CHAT_ID != 0:
+            targets.append(ADMIN_CHAT_ID)
+        for chat_id in set(targets):
+            try:
+                admin_markup = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔎 Проверить в листе ожидания", callback_data="adm_view_pending")]
+                ])
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"🚨 <b>Поступила новая анкета через API Mini App!</b>\n• Пациент: {fullname}\n• Телефон: {phone}\n• Направление: {direction}",
+                    reply_markup=admin_markup,
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception:
+                pass
+                
+        return web.json_response({"status": "ok", "message": "Заявка успешно создана"})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=400)
+
+async def handle_get_profile(request):
+    try:
+        user_id = int(request.match_info.get("user_id"))
+        user_data = await db_get_user(user_id) or {}
+        app_data = await db_get_user_application(user_id)
+        return web.json_response({
+            "user": user_data,
+            "application": app_data
+        })
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=400)
+
+@web.middleware
+async def cors_middleware(request, handler):
+    if request.method == "OPTIONS":
+        return web.Response(headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        })
+    response = await handler(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
+
+# ═══════════════════════════════════════════════════
+#                ТОЧКА ВХОДА В ПРОГРАММУ
+# ═══════════════════════════════════════════════════
 
 async def main():
     await init_db()
@@ -1042,9 +1108,13 @@ async def main():
     dp.include_router(router)
     await bot.delete_webhook(drop_pending_updates=True)
     
-    app = web.Application()
+    app = web.Application(middlewares=[cors_middleware])
     app.router.add_get("/", render_health_check)
     app.router.add_get("/health", render_health_check)
+    app.router.add_get("/api/doctors", handle_get_doctors)
+    app.router.add_post("/api/booking", handle_api_booking)
+    app.router.add_get("/api/profile/{user_id}", handle_get_profile)
+
     runner = web.AppRunner(app)
     await runner.setup()
     
@@ -1054,7 +1124,7 @@ async def main():
     except Exception as e:
         logging.warning(f"Не удалось запустить веб-сервер на порту {port}: {e}")
 
-    print("🚀 Бот запущен с асинхронной БД, Личным Кабинетом и поддержкой Telegram Stars!")
+    print("🚀 Бот запущен с асинхронной БД, Личным Кабинетом, REST API и поддержкой Telegram Stars!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

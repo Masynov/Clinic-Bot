@@ -1,22 +1,18 @@
 <!DOCTYPE html>
 <html lang="ru">
-
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Личный кабинет — ПРАЙМ</title>
-    <!-- Telegram WebApp SDK -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Прайм - Кабинет пациента</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <!-- Генератор QR-кода -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         :root {
-            --bg-color: var(--tg-theme-bg-color, #f4f4f5);
+            --bg-color: var(--tg-theme-bg-color, #f4f6f9);
+            --text-color: var(--tg-theme-text-color, #222);
+            --hint-color: var(--tg-theme-hint-color, #707579);
+            --button-color: var(--tg-theme-button-color, #2481cc);
+            --button-text-color: var(--tg-theme-button-text-color, #fff);
             --card-bg: var(--tg-theme-secondary-bg-color, #ffffff);
-            --text-color: var(--tg-theme-text-color, #1c1c1e);
-            --hint-color: var(--tg-theme-hint-color, #8e8e93);
-            --button-color: var(--tg-theme-button-color, #007aff);
-            --button-text: var(--tg-theme-button-text-color, #ffffff);
         }
 
         body {
@@ -24,219 +20,211 @@
             background-color: var(--bg-color);
             color: var(--text-color);
             margin: 0;
+            padding: 0;
+            padding-bottom: 70px;
+        }
+
+        .header {
             padding: 16px;
-            box-sizing: border-box;
-            -webkit-tap-highlight-color: transparent;
-        }
-
-        /* Профиль пациента */
-        .profile-card {
-            background-color: var(--card-bg);
-            border-radius: 16px;
-            padding: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-            margin-bottom: 20px;
-        }
-
-        .user-info h2 {
-            margin: 0 0 4px 0;
-            font-size: 18px;
-            font-weight: 600;
-        }
-
-        .user-info p {
-            margin: 0;
-            font-size: 13px;
-            color: var(--hint-color);
-        }
-
-        .qr-btn {
-            background: rgba(0, 122, 255, 0.1);
-            color: var(--button-color);
-            border: none;
-            padding: 10px 14px;
-            border-radius: 12px;
-            font-weight: 600;
-            font-size: 13px;
-            cursor: pointer;
-        }
-
-        /* Вкладки (Tabs) */
-        .tabs {
-            display: flex;
             background: var(--card-bg);
-            padding: 4px;
-            border-radius: 12px;
-            margin-bottom: 16px;
-        }
-
-        .tab {
-            flex: 1;
             text-align: center;
-            padding: 8px 0;
-            font-size: 14px;
-            font-weight: 500;
-            border-radius: 8px;
-            cursor: pointer;
-            color: var(--hint-color);
-            transition: all 0.2s ease;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
         }
 
-        .tab.active {
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            font-weight: 600;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06);
-        }
+        .header h2 { margin: 0; font-size: 20px; }
+        .header p { margin: 4px 0 0; font-size: 13px; color: var(--hint-color); }
 
-        /* Список карточек */
-        .visits-list {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
+        .container { padding: 16px; max-width: 600px; margin: auto; }
 
-        .visit-card {
-            background-color: var(--card-bg);
-            border-radius: 16px;
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
             padding: 16px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+            margin-bottom: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
         }
 
-        .visit-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 10px;
+        .card h3 { margin-top: 0; font-size: 16px; color: var(--button-color); }
+
+        label { display: block; font-size: 13px; color: var(--hint-color); margin-bottom: 6px; }
+        input, select {
+            width: 100%;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+            background: var(--bg-color);
+            color: var(--text-color);
+            margin-bottom: 12px;
+            box-sizing: border-box;
         }
 
-        .doc-spec {
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: var(--hint-color);
-            font-weight: 600;
-        }
-
-        .doc-name {
-            font-size: 16px;
-            font-weight: 600;
-            margin: 2px 0 0 0;
-        }
-
-        .badge {
-            font-size: 11px;
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-weight: 600;
-        }
-
-        .badge.completed {
-            background: #e5f9ed;
-            color: #2e7d32;
-        }
-
-        .badge.upcoming {
-            background: #e3f2fd;
-            color: #1565c0;
-        }
-
-        .visit-meta {
-            display: flex;
-            gap: 16px;
-            font-size: 13px;
-            color: var(--hint-color);
+        .slots-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
             margin-bottom: 12px;
         }
 
-        /* Разворачиваемый блок с рекомендациями */
-        .details {
-            display: none;
-            border-top: 1px solid var(--bg-color);
-            padding-top: 12px;
-            margin-top: 8px;
-            font-size: 13px;
-            line-height: 1.4;
-        }
-
-        .details.open {
-            display: block;
-        }
-
-        .toggle-btn {
-            background: none;
-            border: none;
-            color: var(--button-color);
-            padding: 0;
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-        }
-
-        /* Модальное окно QR-кода */
-        .modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.6);
-            align-items: center;
-            justify-content: center;
-            z-index: 100;
-        }
-
-        .modal-content {
-            background: var(--card-bg);
-            padding: 24px;
-            border-radius: 20px;
+        .slot-btn {
+            padding: 8px;
+            background: var(--bg-color);
+            border: 1px solid var(--button-color);
+            color: var(--text-color);
+            border-radius: 6px;
             text-align: center;
-            width: 80%;
-            max-width: 280px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .slot-btn.selected {
+            background: var(--button-color);
+            color: var(--button-text-color);
         }
 
-        #qrcode {
-            margin: 16px auto;
-            display: flex;
-            justify-content: center;
+        .btn {
+            background: var(--button-color);
+            color: var(--button-text-color);
+            border: none;
+            width: 100%;
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 15px;
         }
+
+        /* Навигационная панель снизу */
+        .nav-bar {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background: var(--card-bg);
+            display: flex;
+            justify-content: space-around;
+            padding: 8px 0;
+            border-top: 1px solid rgba(0,0,0,0.1);
+            box-sizing: border-box;
+        }
+
+        .nav-item {
+            text-align: center;
+            font-size: 11px;
+            color: var(--hint-color);
+            cursor: pointer;
+            flex: 1;
+        }
+        .nav-item.active {
+            color: var(--button-color);
+            font-weight: bold;
+        }
+        .nav-icon { font-size: 18px; display: block; margin-bottom: 2px; }
     </style>
 </head>
-
 <body>
 
-    <!-- Шапка профиля -->
-    <div class="profile-card">
-        <div class="user-info">
-            <h2 id="user-name">Пациент</h2>
-            <p id="card-number">Карта № PRM-88392</p>
+    <div class="header">
+        <h2>Медицинский центр «ПРАЙМ»</h2>
+        <p>Электронный портал пациента</p>
+    </div>
+
+    <div class="container">
+        
+        <!-- ВКЛАДКА 1: ИНТЕРАКТИВНАЯ ЗАПИСЬ -->
+        <div id="tab-booking" class="tab-content active">
+            <div class="card">
+                <h3>📅 Онлайн-запись на прием</h3>
+                
+                <label>Выберите специалиста:</label>
+                <select id="doctorSelect">
+                    <option value="Иванов И.И. (Кардиолог)">д.м.н. Иванов И.И. (Кардиолог)</option>
+                    <option value="Петрова А.С. (Терапевт)">к.м.н. Петрова А.С. (Терапевт)</option>
+                </select>
+
+                <label>Дата приема:</label>
+                <input type="date" id="bookingDate">
+
+                <label>Доступное время:</label>
+                <div class="slots-grid" id="slotsContainer">
+                    <div class="slot-btn" onclick="selectSlot(this)">09:00</div>
+                    <div class="slot-btn" onclick="selectSlot(this)">10:30</div>
+                    <div class="slot-btn" onclick="selectSlot(this)">12:00</div>
+                    <div class="slot-btn" onclick="selectSlot(this)">14:00</div>
+                    <div class="slot-btn" onclick="selectSlot(this)">15:30</div>
+                    <div class="slot-btn" onclick="selectSlot(this)">17:00</div>
+                </div>
+
+                <label>Контактный телефон:</label>
+                <input type="tel" id="bookingPhone" placeholder="+7 (999) 000-00-00">
+
+                <button class="btn" onclick="submitBooking()">Подтвердить запись</button>
+            </div>
         </div>
-        <button class="qr-btn" onclick="openQrModal()">QR Чек-ин</button>
+
+        <!-- ВКЛАДКА 2: ЭМК (ЭЛЕКТРОННАЯ МЕДКАРТА) -->
+        <div id="tab-emr" class="tab-content">
+            <div class="card">
+                <h3>📋 Электронная медицинская карта</h3>
+                <p><b>Статус:</b> Активна ✅</p>
+                <p><b>Группа крови:</b> A(II) Rh+</p>
+                <hr style="border:0; border-top:1px solid rgba(0,0,0,0.05); margin: 12px 0;">
+                <h4>История и результаты:</h4>
+                <div style="font-size: 14px; margin-bottom: 8px;">
+                    📄 <b>Заключение кардиолога</b> (15.06.2026)<br>
+                    <span style="color: var(--hint-color);">ЭКГ в норме, рекомендован курс витаминов.</span>
+                </div>
+                <div style="font-size: 14px;">
+                    🧪 <b>Общий анализ крови</b> (10.05.2026)<br>
+                    <span style="color: var(--hint-color);">Гемоглобин 140 г/л. Показатели стабильные.</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ВКЛАДКА 3: ПАКЕТЫ УСЛУГ И ОПЛАТА -->
+        <div id="tab-packages" class="tab-content">
+            <div class="card">
+                <h3>🎁 Комплексные чекапы</h3>
+                <p>Пакетные предложения со скидкой до 20%.</p>
+                <hr style="border:0; border-top:1px solid rgba(0,0,0,0.05); margin: 12px 0;">
+                <div style="margin-bottom: 14px;">
+                    <b>❤️ «Здоровое сердце»</b><<br>
+                    <span style="font-size: 13px; color: var(--hint-color);">Прием кардиолога + ЭКГ + Липидограмма</span><br>
+                    <b>4 500 руб. / 45 ⭐️</b><br>
+                    <button class="btn" style="margin-top: 8px; padding: 8px;" onclick="buyPackage('Пакет: Здоровое сердце', 45)">Оплатить звёздами</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ВКЛАДКА 4: ЛОЯЛЬНОСТЬ -->
+        <div id="tab-loyalty" class="tab-content">
+            <div class="card">
+                <h3>⭐ Программа лояльности</h3>
+                <p style="font-size: 24px; font-weight: bold; color: var(--button-color); margin: 8px 0;">350 баллов</p>
+                <p style="font-size: 13px; color: var(--hint-color);">Кэшбэк 5% с каждого посещения клиники.</p>
+                <hr style="border:0; border-top:1px solid rgba(0,0,0,0.05); margin: 12px 0;">
+                <h4>Реферальная программа:</h4>
+                <p style="font-size: 13px;">Пригласите друга и получите <b>200 баллов</b> на ваш счет после его визита.</p>
+                <button class="btn" onclick="copyRefLink()">Скопировать реферальную ссылку</button>
+            </div>
+        </div>
+
     </div>
 
-    <!-- Табы -->
-    <div class="tabs">
-        <div class="tab active" onclick="switchTab('past', this)">Прошедшие (2)</div>
-        <div class="tab" onclick="switchTab('upcoming', this)">Предстоящие (1)</div>
-    </div>
-
-    <!-- Контейнер карточек -->
-    <div class="visits-list" id="visits-container">
-        <!-- Карточки рендерятся через JS -->
-    </div>
-
-    <!-- Модальное окно с QR-кодом -->
-    <div class="modal" id="qrModal" onclick="closeQrModal()">
-        <div class="modal-content" onclick="event.stopPropagation()">
-            <h3 style="margin-top:0;">Ваш QR для чек-ина</h3>
-            <p style="font-size: 12px; color: var(--hint-color);">Покажите этот код администратору на ресепшене клиники
-            </p>
-            <div id="qrcode"></div>
-            <button class="qr-btn" style="width: 100%; margin-top: 12px;" onclick="closeQrModal()">Закрыть</button>
+    <!-- НИЖНЯЯ ПАНЕЛЬ НАВИГАЦИИ -->
+    <div class="nav-bar">
+        <div class="nav-item active" onclick="switchTab('booking', this)">
+            <span class="nav-icon">📅</span>Запись
+        </div>
+        <div class="nav-item" onclick="switchTab('emr', this)">
+            <span class="nav-icon">📋</span>ЭМК
+        </div>
+        <div class="nav-item" onclick="switchTab('packages', this)">
+            <span class="nav-icon">🎁</span>Пакеты
+        </div>
+        <div class="nav-item" onclick="switchTab('loyalty', this)">
+            <span class="nav-icon">⭐</span>Бонусы
         </div>
     </div>
 
@@ -244,125 +232,59 @@
         const tg = window.Telegram.WebApp;
         tg.expand();
 
-        // 1. Автоподстановка имени пользователя из Telegram
-        if (tg.initDataUnsafe && tg.initDataUnsafe.user) {
-            const user = tg.initDataUnsafe.user;
-            document.getElementById('user-name').innerText = `${user.first_name} ${user.last_name || ''}`;
+        let selectedTime = null;
+
+        function switchTab(tabId, element) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+            
+            document.getElementById('tab-' + tabId).classList.add('active');
+            element.classList.add('active');
         }
 
-        // 2. Моковые данные о визитах (в реальности берутся по API с вашего сервера)
-        const mockVisits = {
-            past: [
-                {
-                    spec: "Кардиология",
-                    doctor: "д.м.н. Иванов И.И.",
-                    date: "12 Июня 2026",
-                    time: "14:30",
-                    status: "Завершен",
-                    diagnosis: "Первичный осмотр. ЭКГ в норме.",
-                    prescription: "Таблетки Магне B6 — 1 т. 2 раза в день (14 дней). Повторный прием через месяц."
-                },
-                {
-                    spec: "Терапия",
-                    doctor: "к.м.н. Петрова А.С.",
-                    date: "28 Мая 2026",
-                    time: "10:00",
-                    status: "Завершен",
-                    diagnosis: "ОРВИ легкой формы.",
-                    prescription: "Обильное теплое питье, витамин C 1000мг."
-                }
-            ],
-            upcoming: [
-                {
-                    spec: "Кардиология",
-                    doctor: "д.м.н. Иванов И.И.",
-                    date: "10 Августа 2026",
-                    time: "11:00",
-                    status: "Подтвержден",
-                    cabinet: "Кабинет № 304 (3 этаж)"
-                }
-            ]
-        };
+        function selectSlot(element) {
+            document.querySelectorAll('.slot-btn').forEach(el => el.classList.remove('selected'));
+            element.classList.add('selected');
+            selectedTime = element.innerText;
+        }
 
-        let currentTab = 'past';
+        function submitBooking() {
+            const doctor = document.getElementById('doctorSelect').value;
+            const date = document.getElementById('bookingDate').value;
+            const phone = document.getElementById('bookingPhone').value;
 
-        // 3. Рендер карточек
-        function renderVisits(type) {
-            const container = document.getElementById('visits-container');
-            container.innerHTML = '';
+            if (!date || !selectedTime || !phone) {
+                alert('Пожалуйста, заполните дату, выберите время и укажите телефон!');
+                return;
+            }
 
-            mockVisits[type].forEach((visit, index) => {
-                const card = document.createElement('div');
-                card.className = 'visit-card';
+            const data = {
+                action: "mini_app_booking",
+                doctor: doctor,
+                date: date,
+                time: selectedTime,
+                phone: phone
+            };
 
-                const isCompleted = type === 'past';
-                const badgeClass = isCompleted ? 'completed' : 'upcoming';
+            tg.sendData(JSON.stringify(data));
+        }
 
-                card.innerHTML = `
-                    <div class="visit-header">
-                        <div>
-                            <div class="doc-spec">${visit.spec}</div>
-                            <h3 class="doc-name">${visit.doctor}</h3>
-                        </div>
-                        <span class="badge ${badgeClass}">${visit.status}</span>
-                    </div>
-                    <div class="visit-meta">
-                        <span>📅 ${visit.date}</span>
-                        <span>⏰ ${visit.time}</span>
-                    </div>
-                    ${isCompleted ? `
-                        <button class="toggle-btn" onclick="toggleDetails(${index})">Показать заключение ▼</button>
-                        <div class="details" id="details-${index}">
-                            <p><b>Диагноз:</b> ${visit.diagnosis}</p>
-                            <p><b>Назначения:</b> ${visit.prescription}</p>
-                        </div>
-                    ` : `
-                        <div style="font-size: 13px; color: var(--hint-color);">📍 ${visit.cabinet}</div>
-                    `}
-                `;
-                container.appendChild(card);
+        function buyPackage(packageName, stars) {
+            const data = {
+                action: "mini_app_buy_package",
+                package: packageName,
+                price: stars
+            };
+            tg.sendData(JSON.stringify(data));
+        }
+
+        function copyRefLink() {
+            const userId = tg.initDataUnsafe?.user?.id || '000000';
+            const refLink = `https://t.me/your_bot_username?start=ref_${userId}`;
+            navigator.clipboard.writeText(refLink).then(() => {
+                alert('Реферальная ссылка скопирована в буфер обмена!');
             });
         }
-
-        // 4. Переключение вкладок
-        function switchTab(type, element) {
-            if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('light'); // Виброотклик
-
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            element.classList.add('active');
-            currentTab = type;
-            renderVisits(type);
-        }
-
-        // 5. Аккордеон деталей
-        function toggleDetails(index) {
-            if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
-            const el = document.getElementById(`details-${index}`);
-            el.classList.toggle('open');
-        }
-
-        // 6. Управление QR-кодом
-        let qrGenerated = false;
-        function openQrModal() {
-            if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
-            document.getElementById('qrModal').style.display = 'flex';
-            if (!qrGenerated) {
-                new QRCode(document.getElementById("qrcode"), {
-                    text: "PRM-PATIENT-88392",
-                    width: 160,
-                    height: 160
-                });
-                qrGenerated = true;
-            }
-        }
-
-        function closeQrModal() {
-            document.getElementById('qrModal').style.display = 'none';
-        }
-
-        // Первичный рендеринг
-        renderVisits('past');
     </script>
 </body>
-
 </html>
