@@ -1,62 +1,65 @@
-import sqlite3
-from datetime import datetime
+import aiosqlite
 
-DB_NAME = "clinic_bot.db"
+DB_PATH = "clinic.db"
 
-def init_db():
-    """Создание таблиц при запуске"""
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS patients (
-                user_id INTEGER PRIMARY KEY,
-                name TEXT,
-                phone TEXT
+async def init_db():
+    """Инициализация таблиц при запуске (данные не перезаписываются)"""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Таблица анкет
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS profiles (
+                user_id BIGINT PRIMARY KEY,
+                full_name TEXT,
+                phone TEXT,
+                info TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS requests (
+        """)
+        # Таблица отзывов
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS reviews (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                service TEXT,
-                status TEXT DEFAULT 'Новая',
-                created_at TEXT,
-                FOREIGN KEY (user_id) REFERENCES patients (user_id)
+                user_id BIGINT,
+                rating INTEGER,
+                review_text TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        ''')
-        conn.commit()
+        """)
+        await db.commit()
 
-def save_patient_request(user_id: int, name: str, phone: str, service: str):
-    """Сохранение/обновление пациента и добавление новой заявки"""
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        
-        # Обновляем профиль пациента
-        cursor.execute('''
-            INSERT INTO patients (user_id, name, phone)
-            VALUES (?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET name=excluded.name, phone=excluded.phone
-        ''', (user_id, name, phone))
-        
-        # Добавляем новую заявку
-        now = datetime.now().strftime("%d.%m.%Y %H:%M")
-        cursor.execute('''
-            INSERT INTO requests (user_id, service, created_at)
-            VALUES (?, ?, ?)
-        ''', (user_id, service, now))
-        
-        conn.commit()
+# --- РАБОТА С АНКЕТАМИ (UPSERT: создание или обновление) ---
+async def upsert_profile(user_id: int, full_name: str, phone: str, info: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO profiles (user_id, full_name, phone, info, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                full_name = excluded.full_name,
+                phone = excluded.phone,
+                info = excluded.info,
+                updated_at = CURRENT_TIMESTAMP
+        """, (user_id, full_name, phone, info))
+        await db.commit()
 
-def get_user_requests(user_id: int) -> list:
-    """Получение истории заявок пациента"""
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, service, status, created_at 
-            FROM requests 
-            WHERE user_id = ? 
-            ORDER BY id DESC
-        ''', (user_id,))
-        return cursor.fetchall()
+async def get_profile(user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM profiles WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+# --- РАБОТА С ОТЗЫВАМИ ---
+async def add_review(user_id: int, rating: int, review_text: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO reviews (user_id, rating, review_text)
+            VALUES (?, ?, ?)
+        """, (user_id, rating, review_text))
+        await db.commit()
+
+async def get_reviews(limit: int = 30):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM reviews ORDER BY id DESC LIMIT ?", (limit,)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
